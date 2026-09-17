@@ -1,0 +1,28 @@
+# Firebase / env
+.firebaserc.local
+database.rules.local.json
+*.service_account.json
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Flutter/Dart
+flutter/.dart_tool/
+flutter/build/
+flutter/.flutter-plugins*
+.flutter-plugins-dependencies
+flutter/android/.gradle/
+flutter/ios/Pods/
+flutter/ios/.symlinks/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,125 @@
+{
+  "rules": {
+    "registrationCodes": {
+      "$code": {
+        ".read": true,
+        ".write": false
+      }
+    },
+
+    "pendingRegistrations": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+
+    "userMeta": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": false
+      }
+    },
+
+    "schools": {
+      "$sid": {
+        "admins": {
+          ".read": true,
+          ".write": false
+        },
+
+        "profile": {
+          ".read": "auth != null && (root.child('userMeta').child(auth.uid).child('schoolId').val() === $sid || root.child('schools').child($sid).child('admins').child(auth.uid).exists())",
+          ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
+        },
+
+        "teachers": {
+          "$uid": {
+            ".read": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || auth.uid === $uid)",
+            ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
+          }
+        },
+
+        "students": {
+          "$uid": {
+            ".read": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || auth.uid === $uid || root.child('userMeta').child(auth.uid).child('role').val() === 'teacher' && root.child('userMeta').child(auth.uid).child('schoolId').val() === $sid && root.child('userMeta').child(auth.uid).child('classId').val() === root.child('schools').child($sid).child('students').child($uid).child('classId').val())",
+            ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
+          }
+        },
+
+        "classes": {
+          "$cid": {
+            ".read": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child($cid).child('teacherUid').val() === auth.uid || root.child('schools').child($sid).child('classes').child($cid).child('students').child(auth.uid).exists())",
+            ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child($cid).child('teacherUid').val() === auth.uid)",
+            "sessions": {
+              ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child($cid).child('teacherUid').val() === auth.uid)"
+            },
+            "students": {
+              ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
+            }
+          }
+        },
+
+        "devices": {
+          "$did": {
+            ".read": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || auth.uid === $did)",
+            ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child(root.child('schools').child($sid).child('devices').child($did).child('classId').val()).child('teacherUid').val() === auth.uid)",
+            "scans": {
+              ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || auth.uid === $did || root.child('schools').child($sid).child('classes').child(root.child('schools').child($sid).child('devices').child($did).child('classId').val()).child('teacherUid').val() === auth.uid)"
+            },
+            "responses": {
+              ".read": "auth != null && (auth.uid === $did || root.child('schools').child($sid).child('admins').child(auth.uid).exists())",
+              ".write": false
+            },
+            "enrollCommand": {
+              ".read": "auth != null && (auth.uid === $did || root.child('schools').child($sid).child('admins').child(auth.uid).exists())",
+              ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child(root.child('schools').child($sid).child('devices').child($did).child('classId').val()).child('teacherUid').val() === auth.uid)"
+            },
+            "label": {
+              ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
+            },
+            "classId": {
+              ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
+            },
+            "schoolId": {
+              ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
+            },
+            "authEmail": {
+              ".read": "auth != null && (auth.uid === $did || root.child('schools').child($sid).child('admins').child(auth.uid).exists())",
+              ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
+            }
+          }
+        },
+
+        "attendance": {
+          "$cid": {
+            "$date": {
+              "$uid": {
+                ".read": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child($cid).child('teacherUid').val() === auth.uid || auth.uid === $uid)",
+                ".write": false
+              }
+            }
+          }
+        },
+
+        "entryLogs": {
+          "$cid": {
+            "$date": {
+              "$logId": {
+                ".read": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child($cid).child('teacherUid').val() === auth.uid)",
+                ".write": false
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "_meta": {
+      "$key": {
+        ".read": false,
+        ".write": false
+      }
+    }
+  }
+}
