@@ -21,12 +21,8 @@
 
 #if OLED_ENABLED
 #include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <U8g2lib.h>
 #include <qrcode.h>
-#else
-#define SSD1306_SWITCHCAPVCC 0
-#define SSD1306_WHITE 1
 #endif
 
 #include "config.h"
@@ -38,7 +34,7 @@ MFRC522 mfrc522(SS_PIN, RST_PIN);
 WiFiClientSecure secureClient;
 
 #if OLED_ENABLED
-Adafruit_SSD1306 display(128, 64, &Wire, -1);
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ OLED_SCL_PIN, /* data=*/ OLED_SDA_PIN);
 #endif
 
 String token = "";
@@ -49,7 +45,7 @@ bool timeValid = false;
 bool processingScan = false;
 
 String MAC_ID = "";
-bool linked = false;
+String linkedSchool = "";
 String linkedClass = "";
 
 struct HttpResult {
@@ -96,6 +92,10 @@ String storageRead() { return storage.getString("queue", ""); }
 bool storageWrite(const String &s) { return storage.putString("queue", s) == (s.length() + 1); }
 #endif
 
+String devicePath() {
+  return "devices/" + MAC_ID;
+}
+
 void logLine(const String &level, const String &msg) {
   Serial.printf("[%10lu] %-6s %s\n", millis(), level.c_str(), msg.c_str());
 #if REMOTE_LOGGING
@@ -106,8 +106,7 @@ void logLine(const String &level, const String &msg) {
     doc["message"] = msg;
     String body;
     serializeJson(doc, body);
-    String url = String(FIREBASE_DATABASE_URL) + "/schools/" SCHOOL_ID +
-                 "/devices/" + MAC_ID + "/logs.json?auth=" + token;
+    String url = String(FIREBASE_DATABASE_URL) + "/" + devicePath() + "/logs.json?auth=" + token;
     HTTPClient http;
     http.begin(secureClient, url);
     http.addHeader("Content-Type", "application/json");
@@ -118,15 +117,160 @@ void logLine(const String &level, const String &msg) {
 }
 
 #if OLED_ENABLED
-void show(int size, const String &line1, const String &line2 = "") {
+
+// --- Drawing helpers ---
+void oledDrawCheck(int x, int y) {
+  display.drawFrame(x, y, 10, 10);
+  display.drawLine(x+2, y+5, x+4, y+8);
+  display.drawLine(x+4, y+8, x+8, y+2);
+}
+
+void oledDrawX(int x, int y) {
+  display.drawFrame(x, y, 10, 10);
+  display.drawLine(x+2, y+2, x+8, y+8);
+  display.drawLine(x+8, y+2, x+2, y+8);
+}
+
+void oledDrawCard(int x, int y) {
+  display.drawFrame(x, y, 20, 14);
+  display.drawHLine(x+2, y+5, 8);
+  display.drawHLine(x+2, y+8, 12);
+  display.drawHLine(x+2, y+11, 6);
+}
+
+void oledProgressBar(int x, int y, int w, int h, int percent) {
+  display.drawFrame(x, y, w, h);
+  int fill = (w - 2) * percent / 100;
+  if (fill > 0) display.drawBox(x+1, y+1, fill, h-2);
+}
+
+void oledStatusBar(const String &left, const String &right) {
+  display.setFont(u8g2_font_5x7_tr);
+  display.drawStr(0, 10, left.c_str());
+  int rw = display.getStrWidth(right.c_str());
+  display.drawStr(128 - rw, 10, right.c_str());
+  display.drawHLine(0, 12, 128);
+}
+
+// --- Screen functions ---
+void oledBootScreen() {
   display.clearDisplay();
-  display.setTextSize(size);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println(line1);
-  if (line2.length()) display.println(line2);
+  display.setFont(u8g2_font_7x14B_tf);
+  display.drawStr(28, 16, "ATTENDOR");
+  display.setFont(u8g2_font_5x7_tr);
+  display.drawStr(36, 28, "booting...");
+  oledProgressBar(14, 40, 100, 8, 0);
   display.display();
 }
+
+void oledBootStep(int step, int total, const String &label, bool ok) {
+  int y = 14 + step * 7;
+  if (y > 54) y = 54;
+  display.setFont(u8g2_font_5x7_tr);
+  if (ok) oledDrawCheck(0, y - 6);
+  else oledDrawX(0, y - 6);
+  display.drawStr(14, y, label.c_str());
+  oledProgressBar(14, 56, 100, 8, (step + 1) * 100 / total);
+  display.display();
+}
+
+void oledReady(const String &className, const String &mac) {
+  display.clearDisplay();
+  oledStatusBar("READY", className.length() ? className : "UNLINKED");
+  display.setFont(u8g2_font_7x14B_tf);
+  oledDrawCard(4, 20);
+  display.drawStr(30, 32, "TAP");
+  display.drawStr(30, 46, "CARD");
+  display.setFont(u8g2_font_4x6_tr);
+  display.drawStr(0, 64, mac.c_str());
+  display.display();
+}
+
+void oledPairQR() {
+  // QR drawn separately by showPairQR
+}
+
+void oledScanning(const String &uid) {
+  display.clearDisplay();
+  oledStatusBar("SCANNING", "");
+  display.setFont(u8g2_font_7x14B_tf);
+  display.drawStr(20, 36, "Processing...");
+  display.setFont(u8g2_font_4x6_tr);
+  if (uid.length()) display.drawStr(0, 52, uid.c_str());
+  display.display();
+}
+
+void oledResult(bool ok, const String &title, const String &msg) {
+  display.clearDisplay();
+  oledStatusBar(ok ? "OK" : "FAIL", "");
+  if (ok) oledDrawCheck(50, 18);
+  else oledDrawX(50, 18);
+  display.setFont(u8g2_font_7x14B_tf);
+  int tw = display.getStrWidth(title.c_str());
+  display.drawStr((128 - tw) / 2, 44, title.c_str());
+  display.setFont(u8g2_font_5x7_tr);
+  if (msg.length()) {
+    String trunc = msg.substring(0, 21);
+    int mw = display.getStrWidth(trunc.c_str());
+    display.drawStr((128 - mw) / 2, 56, trunc.c_str());
+  }
+  display.display();
+}
+
+void oledOffline(const String &uid) {
+  display.clearDisplay();
+  oledStatusBar("OFFLINE", "");
+  display.setFont(u8g2_font_7x14B_tf);
+  display.drawStr(16, 36, "No Network");
+  display.setFont(u8g2_font_5x7_tr);
+  display.drawStr(20, 50, "Scan queued");
+  display.setFont(u8g2_font_4x6_tr);
+  if (uid.length()) display.drawStr(0, 62, uid.c_str());
+  display.display();
+}
+
+void oledEnroll() {
+  display.clearDisplay();
+  oledStatusBar("ENROLL", "assign card");
+  display.setFont(u8g2_font_7x14B_tf);
+  oledDrawCard(50, 20);
+  display.drawStr(0, 44, "Scan student");
+  display.drawStr(0, 54, "card now");
+  display.display();
+}
+
+void oledLinked(const String &classId) {
+  display.clearDisplay();
+  oledStatusBar("LINKED", "");
+  display.setFont(u8g2_font_7x14B_tf);
+  oledDrawCheck(50, 16);
+  display.setFont(u8g2_font_5x7_tr);
+  int cw = display.getStrWidth(classId.c_str());
+  display.drawStr((128 - cw) / 2, 40, classId.c_str());
+  display.setFont(u8g2_font_4x6_tr);
+  display.drawStr(0, 62, "Device ready");
+  display.display();
+}
+
+void oledWifiLost() {
+  display.clearDisplay();
+  oledStatusBar("WiFi", "reconnecting");
+  display.setFont(u8g2_font_7x14B_tf);
+  display.drawStr(16, 36, "WiFi LOST");
+  display.setFont(u8g2_font_5x7_tr);
+  display.drawStr(24, 52, "retrying...");
+  display.display();
+}
+
+void show(int size, const String &line1, const String &line2 = "") {
+  (void)size;
+  display.clearDisplay();
+  display.setFont(u8g2_font_5x7_tr);
+  display.drawStr(0, 12, line1.c_str());
+  if (line2.length()) display.drawStr(0, 24, line2.c_str());
+  display.display();
+}
+
 #else
 void show(int size, const String &line1, const String &line2 = "") {
   (void)size;
@@ -244,7 +388,7 @@ void processCard(const String &tagUid) {
     serializeJson(scan, body);
     queuePush(body);
     logLine("WARN", "offline, scan queued");
-    show(1, "OFFLINE - queued");
+    oledOffline(tagUid);
     processingScan = false;
     return;
   }
@@ -257,10 +401,10 @@ void processCard(const String &tagUid) {
   serializeJson(doc, body);
 
   HttpResult r = httpRequest("POST",
-      urlWithAuth("schools/" SCHOOL_ID "/devices/" + MAC_ID + "/scans"), body);
+      urlWithAuth(devicePath() + "/scans"), body);
   if (r.code != 200) {
     logLine("ERROR", "scan push failed: " + String(r.code));
-    show(1, "SEND FAIL");
+    oledResult(false, "SEND FAIL", "");
     processingScan = false;
     return;
   }
@@ -268,8 +412,8 @@ void processCard(const String &tagUid) {
   deserializeJson(result, r.body);
   String scanId = result["name"] | "";
 
-  show(1, "SCANNING...");
-  String responsePath = "schools/" SCHOOL_ID "/devices/" + MAC_ID + "/responses/" + scanId;
+  oledScanning(tagUid);
+  String responsePath = devicePath() + "/responses/" + scanId;
   unsigned long started = millis();
   while (millis() - started < SCAN_POST_TIMEOUT_MS) {
     HttpResult rr = httpRequest("GET", urlWithAuth(responsePath));
@@ -280,7 +424,7 @@ void processCard(const String &tagUid) {
       String msg = rd["message"] | "";
       logLine(ok ? "INFO" : "WARN", String("result ok=") + (ok ? "true" : "false") +
                                    " msg=" + msg);
-      show(ok ? 2 : 1, ok ? "PRESENT" : "NOT OK", msg.length() > 14 ? msg.substring(0, 14) : msg);
+      oledResult(ok, ok ? "PRESENT" : "NOT OK", msg);
       break;
     }
     delay(200);
@@ -291,7 +435,7 @@ void processCard(const String &tagUid) {
 void pollEnrollCommand() {
   if (!ensureOnline() || !linked) return;
   HttpResult r = httpRequest("GET",
-      urlWithAuth("schools/" SCHOOL_ID "/devices/" + MAC_ID + "/enrollCommand"));
+      urlWithAuth(devicePath() + "/enrollCommand"));
   bool active = (r.code == 200 && r.body != "null" && r.body.length() > 2);
   if (active && !pendingEnroll) {
     JsonDocument doc;
@@ -300,11 +444,11 @@ void pollEnrollCommand() {
     pendingEnroll = studentUid.length() > 0;
     logLine("INFO", String("enroll command: bind card for ") +
                     (studentUid.length() ? studentUid : "student"));
-    show(1, "ASSIGN CARD", "scan now");
+    oledEnroll();
   } else if (!active && pendingEnroll) {
     pendingEnroll = false;
     logLine("INFO", "enroll command done");
-    show(1, "TAP CARD");
+    oledReady(linkedClass, MAC_ID);
   }
 }
 
@@ -313,7 +457,7 @@ void flushQueue() {
   String entry;
   if (!queueFront(entry)) return;
   HttpResult r = httpRequest("POST",
-      urlWithAuth("schools/" SCHOOL_ID "/devices/" + MAC_ID + "/scans"), entry);
+      urlWithAuth(devicePath() + "/scans"), entry);
   if (r.code == 200) {
     queuePop();
     logLine("INFO", "flushed queued scan (" + String(queueSize()) + " left)");
@@ -322,33 +466,40 @@ void flushQueue() {
   }
 }
 
-void saveLink(const String &classId) {
+void saveLink(const String &schoolId, const String &classId) {
   linked = true;
+  linkedSchool = schoolId;
   linkedClass = classId;
   JsonDocument doc;
   doc["linked"] = true;
+  doc["schoolId"] = schoolId;
   doc["classId"] = classId;
   String out;
   serializeJson(doc, out);
   linkWrite(out);
-  logLine("INFO", "LINKED permanently to class " + classId);
-  show(1, "LINKED", classId);
+  logLine("INFO", "LINKED to school " + schoolId + " class " + classId);
+  oledLinked(classId);
 }
 
 #if OLED_ENABLED
 void showPairQr() {
   QRCode qr;
-  uint8_t buf[qrcode_getBufferSize(1)];
-  qrcode_initText(&qr, buf, 1, ECC_LOW, MAC_ID.c_str());
+  uint8_t buf[qrcode_getBufferSize(2)];
+  qrcode_initText(&qr, buf, 2, ECC_LOW, MAC_ID.c_str());
   display.clearDisplay();
-  const uint8_t scale = 3;
+  display.setFont(u8g2_font_7x14B_tf);
+  display.drawStr(20, 12, "UNLINKED");
+  display.setFont(u8g2_font_4x6_tr);
+  int mw = display.getStrWidth(MAC_ID.c_str());
+  display.drawStr((128 - mw) / 2, 62, MAC_ID.c_str());
+  const uint8_t scale = 2;
   int qrPx = qr.size * scale;
   int x0 = (128 - qrPx) / 2;
-  int y0 = (64 - qrPx) / 2;
+  int y0 = 16;
   for (uint8_t y = 0; y < qr.size; y++) {
     for (uint8_t x = 0; x < qr.size; x++) {
       if (qrcode_getModule(&qr, x, y)) {
-        display.fillRect(x0 + x * scale, y0 + y * scale, scale, scale, SSD1306_WHITE);
+        display.drawBox(x0 + x * scale, y0 + y * scale, scale, scale);
       }
     }
   }
@@ -363,6 +514,7 @@ void restoreLink() {
   if (deserializeJson(doc, raw)) return;
   if (doc["linked"] | false) {
     linked = true;
+    linkedSchool = doc["schoolId"] | "";
     linkedClass = doc["classId"] | "";
   }
 }
@@ -370,12 +522,18 @@ void restoreLink() {
 void checkLink() {
   if (!ensureOnline()) return;
   HttpResult r = httpRequest("GET",
-      urlWithAuth("schools/" SCHOOL_ID "/devices/" + MAC_ID));
+      urlWithAuth(devicePath()));
   if (r.code != 200 || r.body == "null" || r.body.length() <= 2) return;
   JsonDocument doc;
   deserializeJson(doc, r.body);
+  String sid = doc["schoolId"] | "";
   String cid = doc["classId"] | "";
-  if (cid.length() > 0 && !linked) saveLink(cid);
+  if (sid.length() > 0 && cid.length() > 0 && !linked) {
+    saveLink(sid, cid);
+#if OLED_ENABLED
+    oledLinked(linkedClass);
+#endif
+  }
 }
 
 void sendPresence() {
@@ -383,11 +541,12 @@ void sendPresence() {
   JsonDocument doc;
   doc["ts"] = (long)time(nullptr) * 1000L;
   doc["classId"] = linked ? linkedClass : "";
+  doc["schoolId"] = linked ? linkedSchool : "";
   doc["linked"] = linked;
   String body;
   serializeJson(doc, body);
   HttpResult r = httpRequest("PUT",
-      urlWithAuth("schools/" SCHOOL_ID "/devices/" + MAC_ID + "/presence"), body);
+      urlWithAuth(devicePath() + "/presence"), body);
   if (r.code != 200) logLine("WARN", "presence failed: " + String(r.code));
 }
 
@@ -396,27 +555,45 @@ void setup() {
   secureClient.setInsecure();
   logLine("INFO", "Attendor device booting");
 
+  const int BOOT_STEPS = 7;
+
 #if OLED_ENABLED
   Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
-  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+  bool oledOk = display.begin();
+  if (!oledOk) {
     logLine("WARN", "OLED init failed");
-  } else {
-    show(0, "ATTENDOR", "booting");
+  }
+  if (oledOk) oledBootScreen();
+#endif
+
+  // Step 1: OLED
+#if OLED_ENABLED
+  if (oledOk) {
+    oledBootStep(0, BOOT_STEPS, "OLED", true);
+    delay(300);
   }
 #endif
 
-#if defined(ESP8266)
+  // Step 2: SPI / RFID
+  #if defined(ESP8266)
   SPI.pins(RC522_SCK_PIN, RC522_MISO_PIN, RC522_MOSI_PIN, RC522_SS_PIN);
   SPI.begin();
-#else
+  #else
   SPI.begin(RC522_SCK_PIN, RC522_MISO_PIN, RC522_MOSI_PIN, RC522_SS_PIN);
-#endif
+  #endif
   mfrc522.PCD_Init();
+#if OLED_ENABLED
+  if (oledOk) { oledBootStep(1, BOOT_STEPS, "RFID", true); delay(300); }
+#endif
 
-  if (!storageBegin()) {
-    logLine("WARN", "storage init failed");
-  }
+  // Step 3: Storage
+  bool storageOk = storageBegin();
+  if (!storageOk) logLine("WARN", "storage init failed");
+#if OLED_ENABLED
+  if (oledOk) { oledBootStep(2, BOOT_STEPS, "Storage", storageOk); delay(300); }
+#endif
 
+  // Step 4: WiFi
   show(1, "CONNECTING", "wifi");
   WiFi.mode(WIFI_STA);
   MAC_ID = WiFi.macAddress();
@@ -427,18 +604,34 @@ void setup() {
   while (WiFi.status() != WL_CONNECTED && millis() - started < 30000) {
     delay(250);
   }
-  if (WiFi.status() == WL_CONNECTED) {
+  bool wifiOk = WiFi.status() == WL_CONNECTED;
+#if OLED_ENABLED
+  if (oledOk) {
+    oledBootStep(3, BOOT_STEPS, wifiOk ? WiFi.localIP().toString().c_str() : "WiFi FAILED", wifiOk);
+    delay(500);
+  }
+#endif
+  if (wifiOk) {
     logLine("INFO", "wifi connected: " + String(WiFi.localIP().toString()));
+
+    // Step 5: NTP
     configTime(0, 0, "time.google.com", "pool.ntp.org");
     started = millis();
     while (time(nullptr) < 100000 && millis() - started < 10000) {
       delay(200);
     }
     timeValid = time(nullptr) >= 100000;
+#if OLED_ENABLED
+    if (oledOk) { oledBootStep(4, BOOT_STEPS, timeValid ? "NTP synced" : "NTP FAILED", timeValid); delay(300); }
+#endif
     logLine(timeValid ? "INFO" : "WARN", timeValid ? "NTP synced" : "NTP not synced");
-    if (!signIn()) {
-      logLine("ERROR", "firebase sign-in failed at boot");
-    }
+
+    // Step 6: Firebase auth
+    bool authOk = signIn();
+#if OLED_ENABLED
+    if (oledOk) { oledBootStep(5, BOOT_STEPS, authOk ? "Firebase" : "Auth FAILED", authOk); delay(300); }
+#endif
+    if (!authOk) logLine("ERROR", "firebase sign-in failed at boot");
   } else {
     logLine("ERROR", "wifi failed");
   }
@@ -447,21 +640,36 @@ void setup() {
     logLine("WARN", String(queueSize()) + " queued scans from previous session");
   }
 
+  // Step 7: Link check
   restoreLink();
   if (linked) {
     logLine("INFO", "device is LINKED to class " + linkedClass);
-    show(1, "LINKED", linkedClass);
   } else {
     logLine("INFO", "UNLINKED - PAIR CODE: " + MAC_ID);
-    logLine("INFO", "paste this code in the Attendor dashboard to link to a class");
-#if OLED_ENABLED
-    showPairQr();
-#else
-    show(1, "PAIR CODE", MAC_ID);
-#endif
   }
+#if OLED_ENABLED
+  if (oledOk) {
+    oledBootStep(6, BOOT_STEPS, linked ? linkedClass.c_str() : "PAIR CODE", linked);
+    delay(800);
+  }
+#endif
 
+  // Final ready screen
+#if OLED_ENABLED
+  if (oledOk) {
+    if (linked) {
+      oledLinked(linkedClass);
+    } else {
+      showPairQr();
+    }
+    delay(1500);
+    oledReady(linkedClass, MAC_ID);
+  } else {
+    show(1, "TAP CARD");
+  }
+#else
   show(1, "TAP CARD");
+#endif
   logLine("INFO", "ready");
 }
 
@@ -476,6 +684,9 @@ void loop() {
     if (millis() - lastReconnect > 5000) {
       lastReconnect = millis();
       logLine("WARN", "wifi lost, reconnecting...");
+#if OLED_ENABLED
+      oledWifiLost();
+#endif
       WiFi.reconnect();
     }
   }
@@ -510,5 +721,9 @@ void loop() {
   mfrc522.PCD_StopCrypto1();
   processCard(tagUid);
 
+#if OLED_ENABLED
+  oledReady(linkedClass, MAC_ID);
+#else
   show(1, "TAP CARD");
+#endif
 }

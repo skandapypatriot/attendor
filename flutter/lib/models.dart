@@ -30,7 +30,7 @@ class UserMeta {
 class ClassInfo {
   final String id;
   final String name;
-  final String teacherUid;
+  final List<String> teacherUids;
   final String deviceId;
   final String entryCode;
   final Map<String, Map<String, String>> windows;
@@ -40,7 +40,7 @@ class ClassInfo {
   ClassInfo({
     required this.id,
     required this.name,
-    required this.teacherUid,
+    required this.teacherUids,
     required this.deviceId,
     required this.entryCode,
     required this.windows,
@@ -60,10 +60,20 @@ class ClassInfo {
     });
     final students = (map['students'] as Map?)?.keys.map((e) => e.toString()).toList() ?? <String>[];
     final active = (map['activeDays'] as List?)?.map((e) => int.parse(e.toString())).toList() ?? <int>[];
+    final teacherUidsRaw = map['teacherUids'];
+    List<String> teacherUids;
+    if (teacherUidsRaw is List) {
+      teacherUids = teacherUidsRaw.map((e) => e.toString()).toList();
+    } else if (teacherUidsRaw is Map) {
+      teacherUids = teacherUidsRaw.keys.map((e) => e.toString()).toList();
+    } else {
+      final single = map['teacherUid']?.toString() ?? '';
+      teacherUids = single.isNotEmpty ? [single] : [];
+    }
     return ClassInfo(
       id: id,
       name: map['name']?.toString() ?? '',
-      teacherUid: map['teacherUid']?.toString() ?? '',
+      teacherUids: teacherUids,
       deviceId: map['deviceId']?.toString() ?? '',
       entryCode: map['entryCode']?.toString() ?? '',
       windows: windows,
@@ -101,22 +111,32 @@ class TeacherRecord {
   final String uid;
   final String name;
   final String email;
-  final String classId;
+  final List<String> classIds;
 
   TeacherRecord({
     required this.uid,
     required this.name,
     required this.email,
-    required this.classId,
+    required this.classIds,
   });
 
   static TeacherRecord fromSnapshot(String uid, Object? value) {
     final map = (value is Map) ? value : <String, Object?>{};
+    final classIdsRaw = map['classIds'];
+    List<String> classIds;
+    if (classIdsRaw is List) {
+      classIds = classIdsRaw.map((e) => e.toString()).toList();
+    } else if (classIdsRaw is Map) {
+      classIds = classIdsRaw.keys.map((e) => e.toString()).toList();
+    } else {
+      final single = map['classId']?.toString() ?? '';
+      classIds = single.isNotEmpty ? [single] : [];
+    }
     return TeacherRecord(
       uid: uid,
       name: map['name']?.toString() ?? '',
       email: map['email']?.toString() ?? '',
-      classId: map['classId']?.toString() ?? '',
+      classIds: classIds,
     );
   }
 }
@@ -124,6 +144,7 @@ class TeacherRecord {
 class DeviceRecord {
   final String id;
   final String label;
+  final String schoolId;
   final String classId;
   final String authEmail;
   final bool presenceLinked;
@@ -132,6 +153,7 @@ class DeviceRecord {
   DeviceRecord({
     required this.id,
     required this.label,
+    required this.schoolId,
     required this.classId,
     required this.authEmail,
     this.presenceLinked = false,
@@ -146,6 +168,7 @@ class DeviceRecord {
     return DeviceRecord(
       id: id,
       label: map['label']?.toString() ?? '',
+      schoolId: map['schoolId']?.toString() ?? '',
       classId: map['classId']?.toString() ?? '',
       authEmail: map['authEmail']?.toString() ?? '',
       presenceLinked: pr is Map ? pr['linked'] == true : false,

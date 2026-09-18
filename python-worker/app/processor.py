@@ -33,16 +33,19 @@ class Processor:
 
     def _tick(self):
         self._process_pending_registrations()
-        schools = ref("schools").get() or {}
-        for sid, school in schools.items():
-            tz_name = (school.get("profile") or {}).get("timezone") or config.DEFAULT_TIMEZONE
-            devices = school.get("devices") or {}
-            for did, device in devices.items():
-                try:
-                    self._process_device(sid, did, device, school, tz_name)
-                    self._process_device_logs(sid, did)
-                except Exception as exc:
-                    log("error", f"device {did} failed: {exc}")
+        devices = ref("devices").get() or {}
+        for did, device in devices.items():
+            sid = (device.get("schoolId") or "").strip()
+            cid = (device.get("classId") or "").strip()
+            if not sid or not cid:
+                continue
+            try:
+                school = ref(f"schools/{sid}").get() or {}
+                tz_name = (school.get("profile") or {}).get("timezone") or config.DEFAULT_TIMEZONE
+                self._process_device(sid, did, device, school, tz_name)
+                self._process_device_logs(did)
+            except Exception as exc:
+                log("error", f"device {did} failed: {exc}")
 
     def _process_pending_registrations(self):
         pending = ref("pendingRegistrations").get() or {}
@@ -75,7 +78,7 @@ class Processor:
 
     def _process_device(self, sid, did, device, school, tz_name):
         cid = device.get("classId")
-        scans = ref(f"schools/{sid}/devices/{did}/scans").get() or {}
+        scans = ref(f"devices/{did}/scans").get() or {}
         if not scans:
             return
         cursor = ref(f"_meta/processedScans/{did}").get() or ""
@@ -90,8 +93,8 @@ class Processor:
                 log("error", f"scan {scan_id} failed: {exc}")
         ref(f"_meta/processedScans/{did}").set(pending_keys[-1])
 
-    def _process_device_logs(self, sid, did):
-        logs_ref = ref(f"schools/{sid}/devices/{did}/logs")
+    def _process_device_logs(self, did):
+        logs_ref = ref(f"devices/{did}/logs")
         logs = logs_ref.get() or {}
         for key, entry in logs.items():
             level = str(entry.get("level", "info")).lower()
@@ -109,32 +112,32 @@ class Processor:
             # Device clock not NTP-synced (uptime millis) or absurd: use server time.
             ts = now_ms
         if not class_node:
-            self._respond(sid, did, scan_id, False, "Device not assigned to a class")
+            self._respond(did, scan_id, False, "Device not assigned to a class")
             return
         if scan.get("type") == "enroll":
             self._handle_enroll(sid, did, cid, class_node, scan_id, tag, ts, tz_name, school)
         else:
             self._handle_attend(sid, did, cid, class_node, scan_id, tag, ts, tz_name, school)
 
-    def _respond(self, sid, did, scan_id, ok, message, **extra):
+    def _respond(self, did, scan_id, ok, message, **extra):
         payload = {"ok": ok, "message": message, "ts": int(time.time() * 1000), **extra}
-        ref(f"schools/{sid}/devices/{did}/responses/{scan_id}").set(payload)
+        ref(f"devices/{did}/responses/{scan_id}").set(payload)
         log("info", f"respond {scan_id}: ok={ok} {message}")
 
     def _handle_enroll(self, sid, did, cid, class_node, scan_id, tag, ts, tz_name, school):
-        command = ref(f"schools/{sid}/devices/{did}/enrollCommand").get()
+        command = ref(f"devices/{did}/enrollCommand").get()
         if not command:
-            self._respond(sid, did, scan_id, False, "No pending card assignment")
+            self._respond(did, scan_id, False, "No pending card assignment")
             return
         student_uid = command.get("studentUid")
         expires = command.get("expiresAt") or 0
         if time.time() * 1000 > expires:
-            ref(f"schools/{sid}/devices/{did}/enrollCommand").delete()
-            self._respond(sid, did, scan_id, False, "Card assignment expired")
+            ref(f"devices/{did}/enrollCommand").delete()
+            self._respond(did, scan_id, False, "Card assignment expired")
             return
         members = (class_node.get("students") or {})
         if student_uid not in members:
-            self._respond(sid, did, scan_id, False, "Command target not in this class")
+            self._respond(did, scan_id, False, "Command target not in this class")
             return
         students = school.get("students") or {}
         for uid, student in students.items():
@@ -142,9 +145,9 @@ class Processor:
                 ref(f"schools/{sid}/students/{uid}/tagUid").set("")
                 log("warn", f"reassigned tag {tag} from {uid} to {student_uid}")
         ref(f"schools/{sid}/students/{student_uid}/tagUid").set(tag)
-        ref(f"schools/{sid}/devices/{did}/enrollCommand").delete()
+        ref(f"devices/{did}/enrollCommand").delete()
         name = (students.get(student_uid) or {}).get("name", student_uid)
-        self._respond(sid, did, scan_id, True, f"Card bound: {name}", studentUid=student_uid)
+        self._respond(did, scan_id, True, f"Card bound: {name}", studentUid=student_uid)
 
     def _handle_attend(self, sid, did, cid, class_node, scan_id, tag, ts, tz_name, school):
         students = school.get("students") or {}
@@ -152,35 +155,35 @@ class Processor:
             s.get("tagUid"): uid for uid, s in students.items() if s.get("tagUid")
         }
         if tag not in tag_to_uid:
-            self._respond(sid, did, scan_id, False, "Tag not registered")
+            self._respond(did, scan_id, False, "Tag not registered")
             return
         uid = tag_to_uid[tag]
         local = to_local(ts, tz_name)
         active_days = class_node.get("activeDays") or [0, 1, 2, 3, 4, 5]
         window, reason = window_for(local, class_node, active_days)
         if not window:
-            self._respond(sid, did, scan_id, False, reason, uid=uid)
+            self._respond(did, scan_id, False, reason, uid=uid)
             return
         date = local.strftime("%Y-%m-%d")
         sessions = (class_node.get("sessions") or {}).get(date, {})
         session = sessions.get(window, {}) or {}
         if session.get("status") == "closed":
             self._log_entry(sid, cid, date, scan_id, uid, ts, window, "late")
-            self._respond(sid, did, scan_id, False, "Session closed", uid=uid, window=window)
+            self._respond(did, scan_id, False, "Session closed", uid=uid, window=window)
             return
         att_block = (school.get("attendance") or {}).get(cid, {}).get(date, {}).get(uid, {})
         window_att = att_block.get(window) or {}
         if "present" in window_att and window_att["present"]:
             ref(f"schools/{sid}/attendance/{cid}/{date}/{uid}/{window}/lastScan").set(ts)
             self._log_entry(sid, cid, date, scan_id, uid, ts, window, "present-again")
-            self._respond(sid, did, scan_id, True, "Already present", uid=uid, window=window)
+            self._respond(did, scan_id, True, "Already present", uid=uid, window=window)
         else:
             ref(f"schools/{sid}/attendance/{cid}/{date}/{uid}/{window}/present").set(True)
             ref(f"schools/{sid}/attendance/{cid}/{date}/{uid}/{window}/firstScan").set(ts)
             ref(f"schools/{sid}/attendance/{cid}/{date}/{uid}/{window}/lastScan").set(ts)
             name = (students.get(uid) or {}).get("name", uid)
             self._log_entry(sid, cid, date, scan_id, uid, ts, window, "present")
-            self._respond(sid, did, scan_id, True, f"Present: {name}", uid=uid, window=window)
+            self._respond(did, scan_id, True, f"Present: {name}", uid=uid, window=window)
         self._maybe_auto_close(sid, cid, date, window, class_node, school, local)
 
     def _log_entry(self, sid, cid, date, scan_id, uid, ts, window, status):

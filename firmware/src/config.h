@@ -26,9 +26,6 @@
 #ifndef FIREBASE_DATABASE_URL
 #define FIREBASE_DATABASE_URL "https://attendor-saas-default-rtdb.firebaseio.com"
 #endif
-#ifndef SCHOOL_ID
-#define SCHOOL_ID "my-school"
-#endif
 
 #ifndef FIREBASE_AUTH_EMAIL
 #define FIREBASE_AUTH_EMAIL "device-123456@attendor.in"

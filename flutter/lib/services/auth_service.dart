@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
@@ -10,12 +11,17 @@ class AuthService extends ChangeNotifier {
 
   User? user;
   UserMeta? meta;
+  bool _loadingMeta = false;
 
   AuthService() {
-    _auth.authStateChanges().listen((u) {
+    _auth.authStateChanges().listen((u) async {
       user = u;
-      meta = null;
-      loadMeta();
+      if (u == null) {
+        meta = null;
+        notifyListeners();
+      } else {
+        await loadMeta();
+      }
     });
   }
 
@@ -23,7 +29,7 @@ class AuthService extends ChangeNotifier {
 
   Future<void> login(String email, String password) async {
     await _auth.signInWithEmailAndPassword(email: email.trim(), password: password);
-    await loadMeta();
+    // authStateChanges listener will fire and call loadMeta()
   }
 
   Future<String> registerStudent({required String code, required String name, required String email, required String password}) async {
@@ -45,9 +51,24 @@ class AuthService extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    final snap = await _root.child('userMeta/${u.uid}').get();
-    meta = UserMeta.fromSnapshot(u.uid, snap.value);
-    notifyListeners();
+    if (_loadingMeta) return; // prevent double-load
+    _loadingMeta = true;
+    try {
+      final snap = await _root.child('userMeta/${u.uid}').get();
+      final newMeta = UserMeta.fromSnapshot(u.uid, snap.value);
+      if (newMeta != null) {
+        meta = newMeta;
+        notifyListeners();
+      } else {
+        // meta not created yet, retry after delay
+        await Future.delayed(const Duration(seconds: 2));
+        final snap2 = await _root.child('userMeta/${u.uid}').get();
+        meta = UserMeta.fromSnapshot(u.uid, snap2.value);
+        notifyListeners();
+      }
+    } finally {
+      _loadingMeta = false;
+    }
   }
 
   Future<void> logout() async {

@@ -29,7 +29,51 @@ class AttendApp extends StatelessWidget {
       ],
       child: MaterialApp(
         title: 'Attendor',
-        theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF1E6FEB)), useMaterial3: true),
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF1565C0),
+            brightness: Brightness.light,
+          ),
+          useMaterial3: true,
+          appBarTheme: const AppBarTheme(
+            centerTitle: true,
+            elevation: 0,
+          ),
+          cardTheme: CardThemeData(
+            elevation: 2,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            margin: const EdgeInsets.only(bottom: 12),
+          ),
+          inputDecorationTheme: InputDecorationTheme(
+            filled: true,
+            fillColor: Colors.grey.shade50,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: Colors.grey.shade300),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(width: 2),
+            ),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          ),
+          filledButtonTheme: FilledButtonThemeData(
+            style: FilledButton.styleFrom(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+              textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+          ),
+          outlinedButtonTheme: OutlinedButtonThemeData(
+            style: OutlinedButton.styleFrom(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+              textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ),
         home: const RoleGate(),
       ),
     );
@@ -43,12 +87,17 @@ class RoleGate extends StatelessWidget {
   Widget build(BuildContext context) {
     final auth = context.watch<AuthService>();
 
+    // Not logged in -> show home/login
     if (auth.user == null) {
       return const HomeScreen();
     }
+
+    // Logged in but meta not loaded yet -> show loading
     if (auth.meta == null) {
-      return const WaitingScreen();
+      return const _LoadingMetaScreen();
     }
+
+    // Meta loaded -> route to correct screen
     switch (auth.meta!.role) {
       case Role.admin:
         return const AdminScreen();
@@ -60,52 +109,67 @@ class RoleGate extends StatelessWidget {
   }
 }
 
-class WaitingScreen extends StatefulWidget {
-  const WaitingScreen({super.key});
+class _LoadingMetaScreen extends StatefulWidget {
+  const _LoadingMetaScreen();
 
   @override
-  State<WaitingScreen> createState() => _WaitingScreenState();
+  State<_LoadingMetaScreen> createState() => _LoadingMetaScreenState();
 }
 
-class _WaitingScreenState extends State<WaitingScreen> {
-  int _ticks = 0;
+class _LoadingMetaScreenState extends State<_LoadingMetaScreen> {
+  int _attempts = 0;
 
   @override
   void initState() {
     super.initState();
-    _poll();
+    _retry();
   }
 
-  void _poll() {
-    final auth = context.read<AuthService>();
-    Future.delayed(const Duration(seconds: 3), () async {
+  void _retry() {
+    Future.delayed(const Duration(seconds: 2), () async {
       if (!mounted) return;
+      final auth = context.read<AuthService>();
       await auth.loadMeta();
-      setState(() => _ticks++);
-      if (auth.meta == null && _ticks < 20) {
-        _poll();
+      if (!mounted) return;
+      setState(() => _attempts++);
+      if (auth.meta == null && _attempts < 10) {
+        _retry();
       }
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    final auth = context.read<AuthService>();
-    final registered = auth.user != null && auth.user!.email != null;
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const CircularProgressIndicator(),
-            const SizedBox(height: 16),
-            Text(registered ? 'Adding you to the class...' : 'Loading your role...'),
-            if (_ticks >= 20) const SizedBox(height: 8),
-            if (_ticks >= 20)
-              TextButton(
-                onPressed: () => context.read<AuthService>().logout(),
-                child: const Text('Logout'),
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: cs.primaryContainer,
+                shape: BoxShape.circle,
               ),
+              child: Icon(Icons.hourglass_top_rounded, size: 36, color: cs.onPrimaryContainer),
+            ),
+            const SizedBox(height: 24),
+            CircularProgressIndicator(color: cs.primary),
+            const SizedBox(height: 16),
+            Text(
+              'Loading your account...',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(color: cs.onSurfaceVariant),
+            ),
+            if (_attempts >= 10) ...[
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: () => context.read<AuthService>().logout(),
+                icon: const Icon(Icons.logout),
+                label: const Text('Logout'),
+              ),
+            ],
           ],
         ),
       ),

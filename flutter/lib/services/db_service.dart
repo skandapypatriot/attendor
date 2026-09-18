@@ -62,12 +62,11 @@ class DbService {
   }
 
   Future<List<DeviceRecord>> fetchDevices(String schoolId) async {
-    final snap = await _root.child('${schoolPath(schoolId)}/devices').get();
+    final snap = await _root.child('devices').get();
     final map = snap.value is Map ? (snap.value as Map) : {};
     return map.entries
         .map((e) => DeviceRecord.fromSnapshot(e.key.toString(), e.value))
-        .where((d) =>
-            d.label.isNotEmpty || d.authEmail.isNotEmpty || d.presenceLinked || d.presenceTs != null)
+        .where((d) => d.schoolId == schoolId)
         .toList();
   }
 
@@ -81,14 +80,14 @@ class DbService {
       throw ArgumentError('Invalid pair code. Expected the 12-hex device code.');
     }
     final now = DateTime.now().millisecondsSinceEpoch;
-    await _root.child('${schoolPath(schoolId)}/devices/$mac').update({
+    await _root.child('devices/$mac').update({
       'label': label.trim().isEmpty ? 'Attendor device' : label.trim(),
       'schoolId': schoolId,
       'classId': classId,
       'linkedAt': now,
     });
     await _root.child('${schoolPath(schoolId)}/classes/$classId/deviceId').set(mac);
-    await _root.child('${schoolPath(schoolId)}/devices/$mac/presence').set(null);
+    await _root.child('devices/$mac/presence').set(null);
   }
 
   Future<List<StudentInfo>> fetchStudentsForClass(String schoolId, String classId) async {
@@ -112,7 +111,7 @@ class DbService {
     final code = _generateCode();
     await _root.child('${schoolPath(schoolId)}/classes/$cid').set({
       'name': name,
-      'teacherUid': teacherUids.isNotEmpty ? teacherUids.first : '',
+      'teacherUids': {},
       'deviceId': '',
       'entryCode': code,
       'windows': {
@@ -128,15 +127,22 @@ class DbService {
       'classId': cid,
       'className': name,
     });
-    if (teacherUids.isNotEmpty) {
-      await assignTeacher(schoolId, cid, teacherUids.first);
+    for (final uid in teacherUids) {
+      await assignTeacher(schoolId, cid, uid);
     }
     return code;
   }
 
   Future<void> assignTeacher(String schoolId, String classId, String teacherUid) async {
-    await _root.child('${schoolPath(schoolId)}/classes/$classId/teacherUid').set(teacherUid);
-    await _root.child('${schoolPath(schoolId)}/teachers/$teacherUid/classId').set(classId);
+    await _root.child('${schoolPath(schoolId)}/teachers/$teacherUid/classIds/$classId').set(true);
+    await _root.child('${schoolPath(schoolId)}/classes/$classId/teacherUids/$teacherUid').set(true);
+    await _root.child('userMeta/$teacherUid/classIds/$classId').set(true);
+  }
+
+  Future<void> unassignTeacher(String schoolId, String classId, String teacherUid) async {
+    await _root.child('${schoolPath(schoolId)}/teachers/$teacherUid/classIds/$classId').remove();
+    await _root.child('${schoolPath(schoolId)}/classes/$classId/teacherUids/$teacherUid').remove();
+    await _root.child('userMeta/$teacherUid/classIds/$classId').remove();
   }
 
   Future<Map<String, String>> createTeacher(String schoolId, {
@@ -150,14 +156,77 @@ class DbService {
     await _root.child('${schoolPath(schoolId)}/teachers/$uid').set({
       'name': name.trim(),
       'email': email.trim(),
-      'classId': '',
+      'classIds': {},
     });
     await _root.child('userMeta/$uid').set({
       'role': 'teacher',
       'schoolId': schoolId,
       'classId': '',
+      'classIds': {},
     });
     return {'uid': uid};
+  }
+
+  Future<String> createTeacherJoinCode(String schoolId, {String schoolName = ''}) async {
+    final code = _generateCode();
+    await _root.child('teacherJoinCodes/$code').set({
+      'schoolId': schoolId,
+      'schoolName': schoolName,
+      'createdAt': DateTime.now().millisecondsSinceEpoch,
+      'used': false,
+    });
+    return code;
+  }
+
+  Future<List<Map<String, dynamic>>> fetchTeacherJoinCodes(String schoolId) async {
+    final snap = await _root.child('teacherJoinCodes').get();
+    final map = snap.value is Map ? (snap.value as Map) : {};
+    final codes = <Map<String, dynamic>>[];
+    map.forEach((key, value) {
+      if (value is Map && value['schoolId'] == schoolId && value['used'] != true) {
+        codes.add({'code': key.toString(), ...Map<String, dynamic>.from(value)});
+      }
+    });
+    return codes;
+  }
+
+  Future<void> removeTeacherJoinCode(String code) async {
+    await _root.child('teacherJoinCodes/$code').remove();
+  }
+
+  Future<String> registerTeacherWithCode({
+    required String code,
+    required String name,
+    required String email,
+    required String password,
+  }) async {
+    final codeSnap = await _root.child('teacherJoinCodes/$code').get();
+    if (!codeSnap.exists || codeSnap.value is! Map) {
+      return 'Invalid or expired teacher code.';
+    }
+    final codeData = codeSnap.value as Map;
+    if (codeData['used'] == true) return 'Code already used.';
+    final schoolId = codeData['schoolId']?.toString() ?? '';
+    if (schoolId.isEmpty) return 'Invalid code data.';
+
+    final cred = await FirebaseAuth.instance
+        .createUserWithEmailAndPassword(email: email.trim(), password: password);
+    final uid = cred.user!.uid;
+
+    await _root.child('${schoolPath(schoolId)}/teachers/$uid').set({
+      'name': name.trim(),
+      'email': email.trim(),
+      'classIds': {},
+    });
+    await _root.child('userMeta/$uid').set({
+      'role': 'teacher',
+      'schoolId': schoolId,
+      'classId': '',
+      'classIds': {},
+    });
+    await _root.child('teacherJoinCodes/$code/used').set(true);
+    await _root.child('teacherJoinCodes/$code/usedBy').set(uid);
+    return '';
   }
 
   Future<Map<String, String>> createDevice(String schoolId, String classId, String label) async {
@@ -166,7 +235,7 @@ class DbService {
     final cred = await FirebaseAuth.instance
         .createUserWithEmailAndPassword(email: email, password: password);
     final did = cred.user!.uid;
-    await _root.child('${schoolPath(schoolId)}/devices/$did').set({
+    await _root.child('devices/$did').set({
       'label': label.trim(),
       'schoolId': schoolId,
       'classId': classId,
@@ -202,7 +271,7 @@ class DbService {
   }
 
   Future<void> requestCardAssignment(String schoolId, String deviceId, String studentUid) async {
-    await _root.child('${schoolPath(schoolId)}/devices/$deviceId/enrollCommand').set({
+    await _root.child('devices/$deviceId/enrollCommand').set({
       'studentUid': studentUid,
       'ts': DateTime.now().millisecondsSinceEpoch,
       'expiresAt': DateTime.now().add(const Duration(minutes: 5)).millisecondsSinceEpoch,
@@ -233,6 +302,49 @@ class DbService {
     });
     final sorted = result.keys.toList()..sort((a, b) => b.compareTo(a));
     return {for (final d in sorted) d: result[d]!};
+  }
+
+  Future<double> fetchAttendancePercentage(String schoolId, String classId) async {
+    final snap = await _root.child('${schoolPath(schoolId)}/attendance/$classId').get();
+    final map = snap.value is Map ? (snap.value as Map) : {};
+    int totalWindows = 0;
+    int presentWindows = 0;
+    map.forEach((dateStr, byUid) {
+      if (byUid is Map) {
+        byUid.forEach((uid, userData) {
+          if (userData is Map) {
+            final am = userData['am'];
+            final pm = userData['pm'];
+            if (am is Map) { totalWindows++; if (am['present'] == true) presentWindows++; }
+            if (pm is Map) { totalWindows++; if (pm['present'] == true) presentWindows++; }
+          }
+        });
+      }
+    });
+    if (totalWindows == 0) return 0;
+    return (presentWindows / totalWindows) * 100;
+  }
+
+  Future<Map<String, dynamic>> fetchStudentAttendance(String schoolId, String classId, String studentUid) async {
+    final snap = await _root.child('${schoolPath(schoolId)}/attendance/$classId').get();
+    final map = snap.value is Map ? (snap.value as Map) : {};
+    int present = 0, total = 0;
+    final days = <String, Map<String, bool>>{};
+    map.forEach((dateStr, byUid) {
+      if (byUid is Map) {
+        final userData = byUid[studentUid];
+        if (userData is Map) {
+          final dateKey = dateStr.toString();
+          final amPresent = userData['am'] is Map && (userData['am'] as Map)['present'] == true;
+          final pmPresent = userData['pm'] is Map && (userData['pm'] as Map)['present'] == true;
+          days[dateKey] = {'am': amPresent, 'pm': pmPresent};
+          if (userData['am'] is Map) { total++; if (amPresent) present++; }
+          if (userData['pm'] is Map) { total++; if (pmPresent) present++; }
+        }
+      }
+    });
+    final sortedDays = Map.fromEntries(days.entries.toList()..sort((a, b) => b.key.compareTo(a.key)));
+    return { 'present': present, 'total': total, 'percentage': total > 0 ? (present / total) * 100.0 : 0.0, 'days': sortedDays };
   }
 
   String? get currentUid => FirebaseAuth.instance.currentUser?.uid;
