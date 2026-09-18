@@ -12,17 +12,30 @@
 #define REMOTE_LOGGING 1
 
 // ============ WIFI ============
+#ifndef WIFI_SSID
 #define WIFI_SSID "YourWiFiSSID"
+#endif
+#ifndef WIFI_PASS
 #define WIFI_PASS "YourWiFiPassword"
+#endif
 
 // ============ FIREBASE (from create_device.py output) ============
+#ifndef FIREBASE_API_KEY
 #define FIREBASE_API_KEY "AIzaSyXXXXXXXXXXXX"
+#endif
+#ifndef FIREBASE_DATABASE_URL
 #define FIREBASE_DATABASE_URL "https://attendor-saas-default-rtdb.firebaseio.com"
+#endif
+#ifndef SCHOOL_ID
 #define SCHOOL_ID "my-school"
-#define DEVICE_ID "U4lW...device-auth-uid"
+#endif
 
+#ifndef FIREBASE_AUTH_EMAIL
 #define FIREBASE_AUTH_EMAIL "device-123456@attendor.in"
+#endif
+#ifndef FIREBASE_AUTH_PASSWORD
 #define FIREBASE_AUTH_PASSWORD "deviceAuthPassword"
+#endif
 
 // ============ RC522 PINOUT (ESP8266 NodeMCU) ============
 // SDA(SS)  D8=15   SCK D5=14   MOSI D7=13   MISO D6=12   RST D3=0

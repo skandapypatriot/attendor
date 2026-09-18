@@ -17,12 +17,13 @@
     "userMeta": {
       "$uid": {
         ".read": "auth != null && auth.uid === $uid",
-        ".write": false
+        ".write": "auth != null && (auth.uid === $uid && !data.exists() && root.child('schools').child(newData.child('schoolId').val()).child('admins').child(auth.uid).exists() || root.child('schools').child(newData.child('schoolId').val()).child('admins').child(auth.uid).exists())"
       }
     },
 
     "schools": {
       "$sid": {
+        ".write": "auth != null && !data.exists() && newData.child('admins').child(auth.uid).val() === true",
         "admins": {
           ".read": true,
           ".write": false
@@ -61,19 +62,22 @@
         },
 
         "devices": {
-          "$did": {
-            ".read": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || auth.uid === $did)",
-            ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child(root.child('schools').child($sid).child('devices').child($did).child('classId').val()).child('teacherUid').val() === auth.uid)",
+          "$mac": {
+            ".read": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || auth.token.mac === $mac)",
+            ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child(root.child('schools').child($sid).child('devices').child($mac).child('classId').val()).child('teacherUid').val() === auth.uid)",
+            "presence": {
+              ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || auth.token.mac === $mac)"
+            },
             "scans": {
-              ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || auth.uid === $did || root.child('schools').child($sid).child('classes').child(root.child('schools').child($sid).child('devices').child($did).child('classId').val()).child('teacherUid').val() === auth.uid)"
+              ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || auth.token.mac === $mac || root.child('schools').child($sid).child('classes').child(root.child('schools').child($sid).child('devices').child($mac).child('classId').val()).child('teacherUid').val() === auth.uid)"
             },
             "responses": {
-              ".read": "auth != null && (auth.uid === $did || root.child('schools').child($sid).child('admins').child(auth.uid).exists())",
+              ".read": "auth != null && (auth.token.mac === $mac || root.child('schools').child($sid).child('admins').child(auth.uid).exists())",
               ".write": false
             },
             "enrollCommand": {
-              ".read": "auth != null && (auth.uid === $did || root.child('schools').child($sid).child('admins').child(auth.uid).exists())",
-              ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child(root.child('schools').child($sid).child('devices').child($did).child('classId').val()).child('teacherUid').val() === auth.uid)"
+              ".read": "auth != null && (auth.token.mac === $mac || root.child('schools').child($sid).child('admins').child(auth.uid).exists())",
+              ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child(root.child('schools').child($sid).child('devices').child($mac).child('classId').val()).child('teacherUid').val() === auth.uid)"
             },
             "label": {
               ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
@@ -85,12 +89,12 @@
               ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
             },
             "authEmail": {
-              ".read": "auth != null && (auth.uid === $did || root.child('schools').child($sid).child('admins').child(auth.uid).exists())",
+              ".read": "auth != null && (auth.token.mac === $mac || root.child('schools').child($sid).child('admins').child(auth.uid).exists())",
               ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
             },
             "logs": {
-              ".read": "auth != null && (auth.uid === $did || root.child('schools').child($sid).child('admins').child(auth.uid).exists())",
-              ".write": "auth != null && (auth.uid === $did || root.child('schools').child($sid).child('admins').child(auth.uid).exists())"
+              ".read": "auth != null && (auth.token.mac === $mac || root.child('schools').child($sid).child('admins').child(auth.uid).exists())",
+              ".write": "auth != null && (auth.token.mac === $mac || root.child('schools').child($sid).child('admins').child(auth.uid).exists())"
             }
           }
         },

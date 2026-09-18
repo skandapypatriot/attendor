@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:flutter/services.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../models.dart';
 import '../services/auth_service.dart';
@@ -357,16 +357,12 @@ class _DevicesTabState extends State<_DevicesTab> {
             padding: const EdgeInsets.all(12),
             children: [
               FilledButton.icon(
-                onPressed: () => _addDevice(context),
-                icon: const Icon(Icons.add),
-                label: const Text('Add ESP32 device'),
+                onPressed: () => _linkDevice(context),
+                icon: const Icon(Icons.qr_code_scanner),
+                label: const Text('Link device by pair code'),
               ),
               const SizedBox(height: 8),
-              for (final d in devices)
-                ListTile(
-                  title: Text('${d.label} - ${classNames[d.classId] ?? d.classId}'),
-                  subtitle: Text(d.authEmail),
-                ),
+              for (final d in devices) _DeviceTile(record: d, className: classNames[d.classId]),
             ],
           ),
         );
@@ -374,18 +370,70 @@ class _DevicesTabState extends State<_DevicesTab> {
     );
   }
 
-  Future<void> _addDevice(BuildContext context) async {
+  Future<void> _linkDevice(BuildContext context) async {
+    final code = TextEditingController();
     final label = TextEditingController();
     String? pickedClass;
+    var scanning = false;
     await showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setState) => AlertDialog(
-          title: const Text('Add ESP32 device'),
+          icon: const Icon(Icons.qr_code_2, color: Colors.teal),
+          title: const Text('Link device to a class'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              TextField(controller: label, decoration: const InputDecoration(labelText: 'Device label (e.g. Room 1 reader)')),
+              const Text(
+                'On the ESP8266 boot it shows its PAIR CODE - a QR on the OLED '
+                '(headless: prints the 12-hex MAC over Serial). Scan the device '
+                'screen with your camera, or paste the code manually, then pick '
+                'the class. The device stays linked permanently.',
+                style: TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              if (!scanning) ...[
+                OutlinedButton.icon(
+                  onPressed: () => setState(() => scanning = true),
+                  icon: const Icon(Icons.qr_code_scanner),
+                  label: const Text('Scan QR from device screen'),
+                ),
+                const SizedBox(height: 12),
+              ] else ...[
+                SizedBox(
+                  height: 160,
+                  child: MobileScanner(
+                    fit: BoxFit.cover,
+                    onDetect: (capture) {
+                      for (final b in capture.barcodes) {
+                        final raw = (b.rawValue ?? '').trim();
+                        final cleaned =
+                            raw.replaceAll(RegExp(r'[^0-9A-Fa-f]'), '').toUpperCase();
+                        if (cleaned.length == 12) {
+                          code.text = cleaned;
+                          setState(() => scanning = false);
+                          break;
+                        }
+                      }
+                    },
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => setState(() => scanning = false),
+                  child: const Text('Stop scanning, type manually'),
+                ),
+                const SizedBox(height: 12),
+              ],
+              TextField(
+                controller: code,
+                decoration: const InputDecoration(
+                  labelText: 'Pair code (12 hex, e.g. A4CF12F2C3DD)',
+                  helperText: 'Shown as QR on OLED / over Serial on boot',
+                ),
+                style: const TextStyle(fontFamily: 'monospace'),
+              ),
+              const SizedBox(height: 12),
+              TextField(controller: label, decoration: const InputDecoration(labelText: 'Device label (optional)')),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 items: _classes.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name))).toList(),
@@ -398,46 +446,71 @@ class _DevicesTabState extends State<_DevicesTab> {
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
             FilledButton(
               onPressed: () async {
-                if (pickedClass == null) return;
-                final db = context.read<DbService>();
-                final creds = await db.createDevice(
-                      widget.schoolId,
-                      pickedClass!,
-                      label.text,
-                    );
-                if (context.mounted) {
-                  Navigator.pop(ctx);
-                  await _showDeviceCreds(context, creds);
+                if (pickedClass == null) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Choose a class')));
+                  return;
                 }
-                _load();
+                final db = context.read<DbService>();
+                try {
+                  await db.linkDeviceByCode(widget.schoolId, code.text, pickedClass!, label.text);
+                  if (context.mounted) {
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                      content: Text('Device $code linked to $pickedClass'),
+                    ));
+                  }
+                  _load();
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+                  }
+                }
               },
-              child: const Text('Create'),
+              child: const Text('Link'),
             ),
           ],
         ),
       ),
     );
   }
+}
 
-  Future<void> _showDeviceCreds(BuildContext context, Map<String, String> creds) async {
-    final text = 'deviceId: ${creds['deviceId']}\nauthEmail: ${creds['authEmail']}\nauthPassword: ${creds['authPassword']}';
-    await showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        icon: const Icon(Icons.warning_amber, color: Colors.orange),
-        title: const Text('Device credentials - save now'),
-        content: SingleChildScrollView(
-          child: SelectableText(text, style: const TextStyle(fontFamily: 'monospace')),
+class _DeviceTile extends StatelessWidget {
+  final DeviceRecord record;
+  final String? className;
+
+  const _DeviceTile({required this.record, required this.className});
+
+  @override
+  Widget build(BuildContext context) {
+    final linked = record.isLinked;
+    final online = record.presenceTs != null;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: Icon(linked ? Icons.link : Icons.link_off, color: linked ? Colors.teal : Colors.orange),
+        title: Row(
+          children: [
+            Flexible(child: Text(record.label.isEmpty ? record.id : record.label)),
+            const SizedBox(width: 8),
+            Chip(
+              label: Text(linked ? 'LINKED' : 'UNLINKED'),
+              backgroundColor:
+                  linked ? Colors.teal.withValues(alpha: 0.15) : Colors.orange.withValues(alpha: 0.15),
+              visualDensity: VisualDensity.compact,
+            ),
+            if (online)
+              Chip(
+                label: const Text('ONLINE'),
+                backgroundColor: Colors.green.withValues(alpha: 0.15),
+                visualDensity: VisualDensity.compact,
+              ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: text));
-              Navigator.pop(ctx);
-            },
-            child: const Text('Copy & close'),
-          ),
-        ],
+        subtitle: Text(
+          'MAC: ${record.id}${record.classId.isNotEmpty ? '\nClass: ${className ?? record.classId}' : ''}'
+          '${record.authEmail.isNotEmpty ? '\n${record.authEmail}' : ''}',
+        ),
       ),
     );
   }

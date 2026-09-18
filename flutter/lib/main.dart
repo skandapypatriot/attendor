@@ -5,7 +5,7 @@ import 'package:provider/provider.dart';
 import 'firebase_options.dart';
 import 'models.dart';
 import 'screens/admin_screen.dart';
-import 'screens/login_screen.dart';
+import 'screens/home_screen.dart';
 import 'screens/student_screen.dart';
 import 'screens/teacher_screen.dart';
 import 'services/auth_service.dart';
@@ -44,7 +44,7 @@ class RoleGate extends StatelessWidget {
     final auth = context.watch<AuthService>();
 
     if (auth.user == null) {
-      return const LoginScreen();
+      return const HomeScreen();
     }
     if (auth.meta == null) {
       return const WaitingScreen();

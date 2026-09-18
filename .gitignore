@@ -2,8 +2,10 @@
 .firebaserc.local
 database.rules.local.json
 *.service_account.json
+service_account.json
 .env
 .env.local
+.firebase/
 
 # Python
 __pycache__/
@@ -11,6 +13,9 @@ __pycache__/
 .venv/
 venv/
 .env
+
+# Firmware credentials (never commit real WiFi/Firebase creds)
+firmware/src/secrets.h
 
 # Flutter/Dart
 flutter/.dart_tool/

@@ -126,21 +126,30 @@ class DeviceRecord {
   final String label;
   final String classId;
   final String authEmail;
+  final bool presenceLinked;
+  final int? presenceTs;
 
   DeviceRecord({
     required this.id,
     required this.label,
     required this.classId,
     required this.authEmail,
+    this.presenceLinked = false,
+    this.presenceTs,
   });
+
+  bool get isLinked => classId.isNotEmpty;
 
   static DeviceRecord fromSnapshot(String id, Object? value) {
     final map = (value is Map) ? value : <String, Object?>{};
+    final pr = map['presence'];
     return DeviceRecord(
       id: id,
       label: map['label']?.toString() ?? '',
       classId: map['classId']?.toString() ?? '',
       authEmail: map['authEmail']?.toString() ?? '',
+      presenceLinked: pr is Map ? pr['linked'] == true : false,
+      presenceTs: pr is Map ? pr['ts'] as int? : null,
     );
   }
 }

@@ -12,6 +12,39 @@ class DbService {
 
   String schoolPath(String schoolId) => 'schools/$schoolId';
 
+  /// Creates a brand-new school with its first admin account (in-app sign-up).
+  /// Returns the new school id.
+  Future<String> createSchool({
+    required String schoolName,
+    required String adminName,
+    required String email,
+    required String password,
+  }) async {
+    final cred = await FirebaseAuth.instance
+        .createUserWithEmailAndPassword(email: email.trim(), password: password);
+    final uid = cred.user!.uid;
+    final sid = _root.child('schools').push().key!;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _root.child('schools/$sid').set({
+      'name': schoolName.trim(),
+      'createdAt': now,
+      'profile': {'name': adminName.trim(), 'email': email.trim(), 'createdAt': now},
+      'admins': {uid: true},
+      'classes': {},
+      'devices': {},
+      'teachers': {},
+      'students': {},
+      'entryLogs': {},
+      'attendance': {},
+    });
+    await _root.child('userMeta/$uid').set({
+      'role': 'admin',
+      'schoolId': sid,
+      'classId': '',
+    });
+    return sid;
+  }
+
   Future<List<ClassInfo>> fetchClasses(String schoolId) async {
     final snap = await _root.child('${schoolPath(schoolId)}/classes').get();
     final map = snap.value is Map ? (snap.value as Map) : {};
@@ -33,8 +66,29 @@ class DbService {
     final map = snap.value is Map ? (snap.value as Map) : {};
     return map.entries
         .map((e) => DeviceRecord.fromSnapshot(e.key.toString(), e.value))
-        .where((d) => d.label.isNotEmpty || d.authEmail.isNotEmpty)
+        .where((d) =>
+            d.label.isNotEmpty || d.authEmail.isNotEmpty || d.presenceLinked || d.presenceTs != null)
         .toList();
+  }
+
+  /// Permanently links a device to a class using the PAIR CODE shown by the
+  /// device (its MAC address, e.g. A4CF12F2C3DD) over Serial / OLED.
+  Future<void> linkDeviceByCode(String schoolId, String code, String classId, String label) async {
+    final mac = code
+        .replaceAll(RegExp(r'[^0-9A-Fa-f]'), '')
+        .toUpperCase();
+    if (mac.isEmpty || mac.length != 12) {
+      throw ArgumentError('Invalid pair code. Expected the 12-hex device code.');
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _root.child('${schoolPath(schoolId)}/devices/$mac').update({
+      'label': label.trim().isEmpty ? 'Attendor device' : label.trim(),
+      'schoolId': schoolId,
+      'classId': classId,
+      'linkedAt': now,
+    });
+    await _root.child('${schoolPath(schoolId)}/classes/$classId/deviceId').set(mac);
+    await _root.child('${schoolPath(schoolId)}/devices/$mac/presence').set(null);
   }
 
   Future<List<StudentInfo>> fetchStudentsForClass(String schoolId, String classId) async {

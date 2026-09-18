@@ -1,5 +1,9 @@
 #include <Arduino.h>
 
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+
 #if defined(ESP8266)
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
@@ -19,6 +23,7 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <qrcode.h>
 #else
 #define SSD1306_SWITCHCAPVCC 0
 #define SSD1306_WHITE 1
@@ -43,6 +48,10 @@ bool pendingEnroll = false;
 bool timeValid = false;
 bool processingScan = false;
 
+String MAC_ID = "";
+bool linked = false;
+String linkedClass = "";
+
 struct HttpResult {
   int code;
   String body;
@@ -59,6 +68,22 @@ String storageRead() {
 }
 bool storageWrite(const String &s) {
   File f = LittleFS.open("/queue.json", "w");
+  if (!f) return false;
+  size_t written = f.print(s);
+  f.close();
+  return written == s.length();
+}
+
+String linkRead() {
+  File f = LittleFS.open("/link.json", "r");
+  if (!f) return "";
+  String s = f.readString();
+  f.close();
+  return s;
+}
+
+bool linkWrite(const String &s) {
+  File f = LittleFS.open("/link.json", "w");
   if (!f) return false;
   size_t written = f.print(s);
   f.close();
@@ -82,7 +107,7 @@ void logLine(const String &level, const String &msg) {
     String body;
     serializeJson(doc, body);
     String url = String(FIREBASE_DATABASE_URL) + "/schools/" SCHOOL_ID +
-                 "/devices/" DEVICE_ID "/logs.json?auth=" + token;
+                 "/devices/" + MAC_ID + "/logs.json?auth=" + token;
     HTTPClient http;
     http.begin(secureClient, url);
     http.addHeader("Content-Type", "application/json");
@@ -198,7 +223,7 @@ bool queuePop() {
   JsonDocument doc;
   if (deserializeJson(doc, storageRead()) || !doc.is<JsonArray>()) return false;
   if (doc.as<JsonArray>().size() == 0) return false;
-  doc.as<JsonArray>().removeAt(0);
+  doc.as<JsonArray>().remove(0);
   String out;
   serializeJson(doc, out);
   return storageWrite(out);
@@ -232,7 +257,7 @@ void processCard(const String &tagUid) {
   serializeJson(doc, body);
 
   HttpResult r = httpRequest("POST",
-      urlWithAuth("schools/" SCHOOL_ID "/devices/" DEVICE_ID "/scans"), body);
+      urlWithAuth("schools/" SCHOOL_ID "/devices/" + MAC_ID + "/scans"), body);
   if (r.code != 200) {
     logLine("ERROR", "scan push failed: " + String(r.code));
     show(1, "SEND FAIL");
@@ -244,7 +269,7 @@ void processCard(const String &tagUid) {
   String scanId = result["name"] | "";
 
   show(1, "SCANNING...");
-  String responsePath = "schools/" SCHOOL_ID "/devices/" DEVICE_ID "/responses/" + scanId;
+  String responsePath = "schools/" SCHOOL_ID "/devices/" + MAC_ID + "/responses/" + scanId;
   unsigned long started = millis();
   while (millis() - started < SCAN_POST_TIMEOUT_MS) {
     HttpResult rr = httpRequest("GET", urlWithAuth(responsePath));
@@ -264,9 +289,9 @@ void processCard(const String &tagUid) {
 }
 
 void pollEnrollCommand() {
-  if (!ensureOnline()) return;
+  if (!ensureOnline() || !linked) return;
   HttpResult r = httpRequest("GET",
-      urlWithAuth("schools/" SCHOOL_ID "/devices/" DEVICE_ID "/enrollCommand"));
+      urlWithAuth("schools/" SCHOOL_ID "/devices/" + MAC_ID + "/enrollCommand"));
   bool active = (r.code == 200 && r.body != "null" && r.body.length() > 2);
   if (active && !pendingEnroll) {
     JsonDocument doc;
@@ -288,7 +313,7 @@ void flushQueue() {
   String entry;
   if (!queueFront(entry)) return;
   HttpResult r = httpRequest("POST",
-      urlWithAuth("schools/" SCHOOL_ID "/devices/" DEVICE_ID "/scans"), entry);
+      urlWithAuth("schools/" SCHOOL_ID "/devices/" + MAC_ID + "/scans"), entry);
   if (r.code == 200) {
     queuePop();
     logLine("INFO", "flushed queued scan (" + String(queueSize()) + " left)");
@@ -297,8 +322,78 @@ void flushQueue() {
   }
 }
 
+void saveLink(const String &classId) {
+  linked = true;
+  linkedClass = classId;
+  JsonDocument doc;
+  doc["linked"] = true;
+  doc["classId"] = classId;
+  String out;
+  serializeJson(doc, out);
+  linkWrite(out);
+  logLine("INFO", "LINKED permanently to class " + classId);
+  show(1, "LINKED", classId);
+}
+
+#if OLED_ENABLED
+void showPairQr() {
+  QRCode qr;
+  uint8_t buf[qrcode_getBufferSize(1)];
+  qrcode_initText(&qr, buf, 1, ECC_LOW, MAC_ID.c_str());
+  display.clearDisplay();
+  const uint8_t scale = 3;
+  int qrPx = qr.size * scale;
+  int x0 = (128 - qrPx) / 2;
+  int y0 = (64 - qrPx) / 2;
+  for (uint8_t y = 0; y < qr.size; y++) {
+    for (uint8_t x = 0; x < qr.size; x++) {
+      if (qrcode_getModule(&qr, x, y)) {
+        display.fillRect(x0 + x * scale, y0 + y * scale, scale, scale, SSD1306_WHITE);
+      }
+    }
+  }
+  display.display();
+}
+#endif
+
+void restoreLink() {
+  String raw = linkRead();
+  if (raw.length() == 0) return;
+  JsonDocument doc;
+  if (deserializeJson(doc, raw)) return;
+  if (doc["linked"] | false) {
+    linked = true;
+    linkedClass = doc["classId"] | "";
+  }
+}
+
+void checkLink() {
+  if (!ensureOnline()) return;
+  HttpResult r = httpRequest("GET",
+      urlWithAuth("schools/" SCHOOL_ID "/devices/" + MAC_ID));
+  if (r.code != 200 || r.body == "null" || r.body.length() <= 2) return;
+  JsonDocument doc;
+  deserializeJson(doc, r.body);
+  String cid = doc["classId"] | "";
+  if (cid.length() > 0 && !linked) saveLink(cid);
+}
+
+void sendPresence() {
+  if (!ensureOnline()) return;
+  JsonDocument doc;
+  doc["ts"] = (long)time(nullptr) * 1000L;
+  doc["classId"] = linked ? linkedClass : "";
+  doc["linked"] = linked;
+  String body;
+  serializeJson(doc, body);
+  HttpResult r = httpRequest("PUT",
+      urlWithAuth("schools/" SCHOOL_ID "/devices/" + MAC_ID + "/presence"), body);
+  if (r.code != 200) logLine("WARN", "presence failed: " + String(r.code));
+}
+
 void setup() {
   Serial.begin(115200);
+  secureClient.setInsecure();
   logLine("INFO", "Attendor device booting");
 
 #if OLED_ENABLED
@@ -324,6 +419,9 @@ void setup() {
 
   show(1, "CONNECTING", "wifi");
   WiFi.mode(WIFI_STA);
+  MAC_ID = WiFi.macAddress();
+  MAC_ID.replace(":", "");
+  MAC_ID.toUpperCase();
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   unsigned long started = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - started < 30000) {
@@ -349,12 +447,28 @@ void setup() {
     logLine("WARN", String(queueSize()) + " queued scans from previous session");
   }
 
+  restoreLink();
+  if (linked) {
+    logLine("INFO", "device is LINKED to class " + linkedClass);
+    show(1, "LINKED", linkedClass);
+  } else {
+    logLine("INFO", "UNLINKED - PAIR CODE: " + MAC_ID);
+    logLine("INFO", "paste this code in the Attendor dashboard to link to a class");
+#if OLED_ENABLED
+    showPairQr();
+#else
+    show(1, "PAIR CODE", MAC_ID);
+#endif
+  }
+
   show(1, "TAP CARD");
   logLine("INFO", "ready");
 }
 
 unsigned long lastCommandPoll = 0;
 unsigned long lastFlush = 0;
+unsigned long lastPresence = 0;
+unsigned long lastLinkCheck = 0;
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) {
@@ -366,9 +480,20 @@ void loop() {
     }
   }
 
-  if (ensureOnline() && millis() - lastCommandPoll > COMMAND_POLL_MS && !processingScan) {
+  if (ensureOnline() && linked && millis() - lastCommandPoll > COMMAND_POLL_MS && !processingScan) {
     lastCommandPoll = millis();
     pollEnrollCommand();
+  }
+
+  if (!linked) {
+    if (millis() - lastPresence > 10000) {
+      lastPresence = millis();
+      sendPresence();
+      if (millis() - lastLinkCheck > 30000 || lastLinkCheck == 0) {
+        lastLinkCheck = millis();
+        checkLink();
+      }
+    }
   }
 
   if (millis() - lastFlush > 2000) {

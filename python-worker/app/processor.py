@@ -103,7 +103,11 @@ class Processor:
 
     def _process_scan(self, sid, did, cid, class_node, scan_id, scan, school, tz_name):
         tag = scan.get("tagUid")
-        ts = scan.get("ts") or int(time.time() * 1000)
+        now_ms = int(time.time() * 1000)
+        ts = scan.get("ts") or now_ms
+        if not isinstance(ts, (int, float)) or ts < 1_577_836_800_000 or ts > now_ms + 86_400_000:
+            # Device clock not NTP-synced (uptime millis) or absurd: use server time.
+            ts = now_ms
         if not class_node:
             self._respond(sid, did, scan_id, False, "Device not assigned to a class")
             return
