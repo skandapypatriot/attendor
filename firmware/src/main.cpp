@@ -47,6 +47,7 @@ bool processingScan = false;
 String MAC_ID = "";
 String linkedSchool = "";
 String linkedClass = "";
+bool linked = false;
 
 struct HttpResult {
   int code;
@@ -388,7 +389,9 @@ void processCard(const String &tagUid) {
     serializeJson(scan, body);
     queuePush(body);
     logLine("WARN", "offline, scan queued");
+#if OLED_ENABLED
     oledOffline(tagUid);
+#endif
     processingScan = false;
     return;
   }
@@ -404,7 +407,9 @@ void processCard(const String &tagUid) {
       urlWithAuth(devicePath() + "/scans"), body);
   if (r.code != 200) {
     logLine("ERROR", "scan push failed: " + String(r.code));
+#if OLED_ENABLED
     oledResult(false, "SEND FAIL", "");
+#endif
     processingScan = false;
     return;
   }
@@ -412,7 +417,11 @@ void processCard(const String &tagUid) {
   deserializeJson(result, r.body);
   String scanId = result["name"] | "";
 
+#if OLED_ENABLED
   oledScanning(tagUid);
+#else
+  show(1, "SCANNING...");
+#endif
   String responsePath = devicePath() + "/responses/" + scanId;
   unsigned long started = millis();
   while (millis() - started < SCAN_POST_TIMEOUT_MS) {
@@ -424,7 +433,11 @@ void processCard(const String &tagUid) {
       String msg = rd["message"] | "";
       logLine(ok ? "INFO" : "WARN", String("result ok=") + (ok ? "true" : "false") +
                                    " msg=" + msg);
+#if OLED_ENABLED
       oledResult(ok, ok ? "PRESENT" : "NOT OK", msg);
+#else
+      show(ok ? 2 : 1, ok ? "PRESENT" : "NOT OK", msg.length() > 14 ? msg.substring(0, 14) : msg);
+#endif
       break;
     }
     delay(200);
@@ -444,11 +457,19 @@ void pollEnrollCommand() {
     pendingEnroll = studentUid.length() > 0;
     logLine("INFO", String("enroll command: bind card for ") +
                     (studentUid.length() ? studentUid : "student"));
+#if OLED_ENABLED
     oledEnroll();
+#else
+    show(1, "ASSIGN CARD", "scan now");
+#endif
   } else if (!active && pendingEnroll) {
     pendingEnroll = false;
     logLine("INFO", "enroll command done");
+#if OLED_ENABLED
     oledReady(linkedClass, MAC_ID);
+#else
+    show(1, "TAP CARD");
+#endif
   }
 }
 
@@ -478,7 +499,9 @@ void saveLink(const String &schoolId, const String &classId) {
   serializeJson(doc, out);
   linkWrite(out);
   logLine("INFO", "LINKED to school " + schoolId + " class " + classId);
+#if OLED_ENABLED
   oledLinked(classId);
+#endif
 }
 
 #if OLED_ENABLED
@@ -555,9 +578,8 @@ void setup() {
   secureClient.setInsecure();
   logLine("INFO", "Attendor device booting");
 
-  const int BOOT_STEPS = 7;
-
 #if OLED_ENABLED
+  const int BOOT_STEPS = 7;
   Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
   bool oledOk = display.begin();
   if (!oledOk) {
