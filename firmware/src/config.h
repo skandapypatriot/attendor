@@ -24,16 +24,18 @@
 #define FIREBASE_AUTH_EMAIL "device-123456@attendor.in"
 #define FIREBASE_AUTH_PASSWORD "deviceAuthPassword"
 
-// ============ RC522 PINOUT (ESP32 DevKit) ============
-#define RC522_SS_PIN 5
-#define RC522_RST_PIN 4
-#define RC522_SCK_PIN 18
-#define RC522_MOSI_PIN 23
-#define RC522_MISO_PIN 19
+// ============ RC522 PINOUT (ESP8266 NodeMCU) ============
+// SDA(SS)  D8=15   SCK D5=14   MOSI D7=13   MISO D6=12   RST D3=0
+#define RC522_SS_PIN 15
+#define RC522_RST_PIN 0
+#define RC522_SCK_PIN 14
+#define RC522_MOSI_PIN 13
+#define RC522_MISO_PIN 12
 
 // ============ OLED 128x64 (SSD1306, I2C) ============
-#define OLED_SDA_PIN 21
-#define OLED_SCL_PIN 22
+// SDA D2=4   SCL D1=5
+#define OLED_SDA_PIN 4
+#define OLED_SCL_PIN 5
 #define OLED_ADDR 0x3C
 
 // ============ BEHAVIOR ============

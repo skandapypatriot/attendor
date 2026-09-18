@@ -1,11 +1,19 @@
 #include <Arduino.h>
+
+#if defined(ESP8266)
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <LittleFS.h>
+#else
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <Preferences.h>
+#endif
+
+#include <WiFiClientSecure.h>
 #include <SPI.h>
 #include <MFRC522.h>
 #include <ArduinoJson.h>
-#include <Preferences.h>
 
 #if OLED_ENABLED
 #include <Wire.h>
@@ -23,7 +31,6 @@
 
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 WiFiClientSecure secureClient;
-Preferences prefs;
 
 #if OLED_ENABLED
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
@@ -36,14 +43,33 @@ bool pendingEnroll = false;
 bool timeValid = false;
 bool processingScan = false;
 
-const char *NVS_NS = "attendor";
-const char *Q_START = "qStart";
-const char *Q_NEXT = "qNext";
-
 struct HttpResult {
   int code;
   String body;
 };
+
+#if defined(ESP8266)
+bool storageBegin() { return LittleFS.begin(); }
+String storageRead() {
+  File f = LittleFS.open("/queue.json", "r");
+  if (!f) return "";
+  String s = f.readString();
+  f.close();
+  return s;
+}
+bool storageWrite(const String &s) {
+  File f = LittleFS.open("/queue.json", "w");
+  if (!f) return false;
+  size_t written = f.print(s);
+  f.close();
+  return written == s.length();
+}
+#else
+Preferences storage;
+bool storageBegin() { return storage.begin("attendor", false); }
+String storageRead() { return storage.getString("queue", ""); }
+bool storageWrite(const String &s) { return storage.putString("queue", s) == (s.length() + 1); }
+#endif
 
 void logLine(const String &level, const String &msg) {
   Serial.printf("[%10lu] %-6s %s\n", millis(), level.c_str(), msg.c_str());
@@ -138,31 +164,61 @@ bool ensureOnline() {
   return true;
 }
 
+void queuePush(const String &body) {
+  JsonDocument doc;
+  deserializeJson(doc, storageRead());
+  if (!doc.is<JsonArray>()) doc.to<JsonArray>();
+  if (doc.as<JsonArray>().size() >= QUEUE_MAX_ENTRIES) {
+    logLine("WARN", "queue full, scan dropped");
+    return;
+  }
+  JsonDocument scan;
+  if (deserializeJson(scan, body)) return;
+  doc.as<JsonArray>().add(scan);
+  String out;
+  serializeJson(doc, out);
+  storageWrite(out);
+}
+
+int queueSize() {
+  JsonDocument doc;
+  deserializeJson(doc, storageRead());
+  return doc.is<JsonArray>() ? doc.as<JsonArray>().size() : 0;
+}
+
+bool queueFront(String &out) {
+  JsonDocument doc;
+  if (deserializeJson(doc, storageRead()) || !doc.is<JsonArray>()) return false;
+  if (doc.as<JsonArray>().size() == 0) return false;
+  serializeJson(doc.as<JsonArray>()[0], out);
+  return true;
+}
+
+bool queuePop() {
+  JsonDocument doc;
+  if (deserializeJson(doc, storageRead()) || !doc.is<JsonArray>()) return false;
+  if (doc.as<JsonArray>().size() == 0) return false;
+  doc.as<JsonArray>().removeAt(0);
+  String out;
+  serializeJson(doc, out);
+  return storageWrite(out);
+}
+
 void processCard(const String &tagUid) {
   processingScan = true;
   String type = pendingEnroll ? "enroll" : "attend";
   long ts = timeValid ? (long)time(nullptr) * 1000L : millis();
   logLine("INFO", String("card read type=") + type + " tag=" + tagUid);
 
-  bool online = ensureOnline();
-  if (!online) {
-    int start = prefs.getInt(Q_START, 0);
-    int next = prefs.getInt(Q_NEXT, 0);
-    if (next - start >= QUEUE_MAX_ENTRIES) {
-      logLine("WARN", "queue full, scan dropped");
-      show(1, "OFFLINE", "queue full");
-      processingScan = false;
-      return;
-    }
-    JsonDocument doc;
-    doc["tagUid"] = tagUid;
-    doc["ts"] = ts;
-    doc["type"] = type;
+  if (!ensureOnline()) {
+    JsonDocument scan;
+    scan["tagUid"] = tagUid;
+    scan["ts"] = ts;
+    scan["type"] = type;
     String body;
-    serializeJson(doc, body);
-    prefs.putString((String("q") + next).c_str(), body);
-    prefs.putInt(Q_NEXT, next + 1);
-    logLine("WARN", "offline, scan queued (#" + String(next) + ")");
+    serializeJson(scan, body);
+    queuePush(body);
+    logLine("WARN", "offline, scan queued");
     show(1, "OFFLINE - queued");
     processingScan = false;
     return;
@@ -228,23 +284,16 @@ void pollEnrollCommand() {
 }
 
 void flushQueue() {
-  int start = prefs.getInt(Q_START, 0);
-  int next = prefs.getInt(Q_NEXT, 0);
-  if (start >= next) return;
   if (!ensureOnline()) return;
-
-  String key = String("q") + start;
-  String entry = prefs.getString(key.c_str(), "");
-  if (entry.length() == 0) return;
-
+  String entry;
+  if (!queueFront(entry)) return;
   HttpResult r = httpRequest("POST",
       urlWithAuth("schools/" SCHOOL_ID "/devices/" DEVICE_ID "/scans"), entry);
   if (r.code == 200) {
-    prefs.remove(key.c_str());
-    prefs.putInt(Q_START, start + 1);
-    logLine("INFO", "flushed queued scan #" + String(start));
+    queuePop();
+    logLine("INFO", "flushed queued scan (" + String(queueSize()) + " left)");
   } else {
-    logLine("ERROR", "flush failed for #" + String(start) + ": " + String(r.code));
+    logLine("ERROR", "flush failed: " + String(r.code));
   }
 }
 
@@ -261,10 +310,17 @@ void setup() {
   }
 #endif
 
+#if defined(ESP8266)
+  SPI.pins(RC522_SCK_PIN, RC522_MISO_PIN, RC522_MOSI_PIN, RC522_SS_PIN);
+  SPI.begin();
+#else
   SPI.begin(RC522_SCK_PIN, RC522_MISO_PIN, RC522_MOSI_PIN, RC522_SS_PIN);
+#endif
   mfrc522.PCD_Init();
 
-  prefs.begin(NVS_NS, false);
+  if (!storageBegin()) {
+    logLine("WARN", "storage init failed");
+  }
 
   show(1, "CONNECTING", "wifi");
   WiFi.mode(WIFI_STA);
@@ -287,6 +343,10 @@ void setup() {
     }
   } else {
     logLine("ERROR", "wifi failed");
+  }
+
+  if (queueSize() > 0) {
+    logLine("WARN", String(queueSize()) + " queued scans from previous session");
   }
 
   show(1, "TAP CARD");

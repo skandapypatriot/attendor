@@ -6,7 +6,7 @@ fontsize: 11pt
 
 # Attendor — RFID School Attendance System
 
-Attendor is an automated school attendance system built on an **ESP32 + RC522 RFID reader with an OLED 128x64 display** (the hardware at school) and a **web dashboard** (the software everyone logs into). It replaces paper registers with card taps, and it is designed so that *anyone* — students, teachers, or the school owner — can understand how it works.
+Attendor is an automated school attendance system built on an **ESP8266 NodeMCU + RC522 RFID reader with an OLED 128x64 display** (the hardware at school) and a **web dashboard** (the software everyone logs into). It replaces paper registers with card taps, and it is designed so that *anyone* — students, teachers, or the school owner — can understand how it works.
 
 ## 1. What Attendor does (for everyone)
 
@@ -22,10 +22,10 @@ Attendor is an automated school attendance system built on an **ESP32 + RC522 RF
 
 | Role | What they can do |
 |------|------------------|
-| **School admin** | Create classes, add teachers, add ESP32 devices, see entry codes, manage the school |
+| **School admin** | Create classes, add teachers, add ESP8266 devices, see entry codes, manage the school |
 | **Teacher** | Live present/absent roster, close a window, assign cards to students |
 | **Student** | Register with an entry code, view own attendance history |
-| **ESP32 device** | Detects card taps, shows the student's name and result on the OLED screen, queues scans offline |
+| **ESP8266 device** | Detects card taps, shows the student's name and result on the OLED screen, queues scans offline |
 
 ## 3. How it works under the hood (for technical people)
 
@@ -33,7 +33,7 @@ Attendor is an automated school attendance system built on an **ESP32 + RC522 RF
 
 ```
 Student taps card
-   └─▶ ESP32 + RC522 reads tag UID
+   └─▶ ESP8266 NodeMCU + RC522 reads tag UID
         ├─▶ OLED 128x64 shows "Welcome, scanning..."
         └─▶ Firebase Realtime Database  (devices/<id>/scans)
              └─▶ Python worker (polls Firebase, runs on Render)
@@ -47,8 +47,8 @@ Student sees it in the dashboard
 
 | Component | Technology | Where it runs |
 |-----------|-----------|---------------|
-| Reader hardware | ESP32 + RC522 (13.56 MHz) + OLED 128x64 (SSD1306, I2C) | In the classroom |
-| Device firmware | Arduino (C++) — Firebase REST, offline queue, OLED UI | On the ESP32 |
+| Reader hardware | ESP8266 NodeMCU + RC522 (13.56 MHz) + OLED 128x64 (SSD1306, I2C) | In the classroom |
+| Device firmware | Arduino (C++) — Firebase REST, offline queue, OLED UI | On the ESP8266 |
 | Backend processor | Python 3 + FastAPI + `firebase-admin` SDK | Render (cloud); background poller + live log web UI |
 | Frontend (web) | Flutter web | Firebase Hosting |
 | Authentication | Firebase Auth (email/password for all roles) | Firebase |
@@ -57,8 +57,8 @@ Student sees it in the dashboard
 ### Key design decisions
 
 - **Tag UID = the student key.** A card is bound to a student the first time the teacher assigns it; the tag UID itself becomes the lookup key.
-- **Device = one class.** Each ESP32 is permanently attached to one class, so a tap unambiguously counts for that class.
-- **Offline-safe.** If the school internet drops, the ESP32 saves scans in local memory and re-sends them when connected (duplicates are ignored).
+- **Device = one class.** Each ESP8266 reader is permanently attached to one class, so a tap unambiguously counts for that class.
+- **Offline-safe.** If the school internet drops, the ESP8266 saves scans in its local file system and re-sends them when connected (duplicates are ignored).
 - **On-device feedback.** The OLED 128x64 display confirms every tap: a green "Present" screen, a card-binding screen, or a red error screen (unknown tag, closed session, off hours).
 - **Self-registration.** Students register with an entry code; a worker verifies the code and adds them to the correct class automatically.
 
@@ -92,10 +92,10 @@ _meta/processedScans/<deviceId>            poller cursor
 
 1. Create a Firebase project; enable email/password auth, Realtime Database, and Hosting.
 2. Deploy the security rules: `firebase deploy --only database`.
-3. Run `bootstrap_school.py` (creates the school + admin) and `create_device.py` (creates an ESP32 login) locally with a service-account key.
+3. Run `bootstrap_school.py` (creates the school + admin) and `create_device.py` (creates an ESP8266 reader login) locally with a service-account key.
 4. Deploy the Python worker on Render (FastAPI + poller). Its URL shows live scan logs.
 5. Build the Flutter dashboard with `--dart-define` Firebase config and deploy to Firebase Hosting.
-6. Flash each ESP32 with its device credentials; mount it at the classroom reader.
+6. Flash each ESP8266 reader with its device credentials; mount it at the classroom reader.
 
 ## 7. Current status
 
@@ -106,7 +106,7 @@ The system is complete end to end:
 | Firebase security rules | Complete |
 | Python worker (scan processing, windows, card binding, log UI) | Complete |
 | Flutter dashboard (admin / teacher / student) | Complete |
-| ESP32 firmware (RC522 + OLED 128x64, Firebase REST, offline queue) | Complete |
+| ESP8266 firmware (RC522 + OLED 128x64, Firebase REST, offline queue) | Complete |
 | Live log web UI | Complete |
 
 Attendor is committed to git and verified (`flutter analyze` clean, unit tests pass). The remaining work is operational, not developmental: creating the school and device registers, deploying to Firebase/Render, and programming the classroom readers.
