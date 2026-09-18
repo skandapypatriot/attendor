@@ -1,0 +1,394 @@
+/*
+  Attendorship Device Firmware -- ESP8266 / NodeMCU (PlatformIO)
+
+  RFID-based school attendance station that plugs into the "attendor"
+  backend (https://github.com/skandapypatriot/attendor).
+
+  Workflow (mirrors python-worker/processor.py):
+    1. User taps an RFID card on the MFRC522 reader.
+    2. Device signs in with its Firebase Auth account (created by
+       scripts/create_device.py) to obtain an idToken.
+    3. Device PUTs a scan to:
+         schools/{SCHOOL_ID}/devices/{DEVICE_ID}/scans/{scanId}
+       as  { "tagUid": "...", "ts": <epoch ms>, "type": "attend" }
+       (type becomes "enroll" while an enrollCommand is pending).
+    4. Device polls schools/{SCHOOL_ID}/devices/{DEVICE_ID}/responses/{scanId}
+       until the python worker answers { "ok": bool, "message": "..." }.
+    5. Result is shown on the SSD1306 OLED.
+
+  Hardware (NodeMCU / ESP-12E):
+    - MFRC522 RFID reader (SPI):
+        SDA(SS) = D8 (GPIO15)   SCK = D5 (GPIO14)
+        MOSI    = D7 (GPIO13)   MISO = D6 (GPIO12)
+        RST     = D3 (GPIO0)
+      NOTE: D8/GPIO15 is the flash-CS strap pin. It works as RC522 SS in
+      this standard wiring, but if the board fails to boot, move SS to
+      another GPIO (e.g. D0/GPIO16) and keep D8 free.
+    - SSD1306 OLED (128x64, I2C):  SDA = D2 (GPIO4), SCL = D1 (GPIO5)
+    - Optional buzzer on D0 (GPIO16) -- set BUZZER_PIN to -1 to disable.
+
+  Libraries (platformio.ini lib_deps):
+    - MFRC522            (miguelbalboa)
+    - Adafruit GFX + SSD1306
+    - ArduinoJson (v6 API used below)
+*/
+
+#include <Arduino.h>
+#include <ESP8266WiFi.h>
+#include <WiFiClientSecure.h>
+#include <ESP8266HTTPClient.h>
+#include <SPI.h>
+#include <Wire.h>
+#include <MFRC522.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <ArduinoJson.h>
+#include <time.h>
+
+/* ------------------------------------------------------------------ */
+/*  CONFIGURATION -- fill these in                                     */
+/* ------------------------------------------------------------------ */
+
+// WiFi
+const char *WIFI_SSID       = "YOUR_SSID";
+const char *WIFI_PASS       = "YOUR_PASSWORD";
+
+// Firebase Web API key (Firebase Console -> Project settings -> General)
+const char *FIREBASE_API_KEY = "AIza...";
+// Realtime Database URL, e.g. https://attendor-saas-default-rtdb.firebaseio.com
+const char *FIREBASE_DB_URL  = "https://YOUR_PROJECT-default-rtdb.firebaseio.com";
+
+// Device credentials printed by scripts/create_device.py (or the Flutter app)
+const char *SCHOOL_ID       = "SCHOOL_ID";
+const char *CLASS_ID        = "CLASS_ID";      // informational, device node holds it
+const char *DEVICE_ID       = "DEVICE_ID";     // Firebase Auth UID of the device
+const char *DEVICE_EMAIL    = "device-...@attendor.in";
+const char *DEVICE_PASSWORD = "PASSWORD";
+
+// TZ offset for the scan timestamp (seconds east of UTC).
+// NTP is used for real time; keep this in sync with the backend DEFAULT_TIMEZONE.
+const long TZ_OFFSET_SEC    = 5 * 3600 + 30 * 60;   // Asia/Kolkata
+
+/* ------------------------------------------------------------------ */
+/*  PINS (NodeMCU labels / GPIO numbers)                               */
+/* ------------------------------------------------------------------ */
+
+#define RST_PIN       0      // RC522 RST  = D3
+#define SS_PIN        15     // RC522 SDA  = D8
+#define OLED_SDA      4      // D2
+#define OLED_SCL      5      // D1
+#define BUZZER_PIN    16     // D0 ; set to -1 to disable
+
+/* ------------------------------------------------------------------ */
+/*  Constants                                                          */
+/* ------------------------------------------------------------------ */
+
+#define SCREEN_W      128
+#define SCREEN_H      64
+#define OLED_ADDR     0x3C
+#define RESPONSE_TIMEOUT_MS  30000   // wait up to 30s for backend answer
+#define POLL_INTERVAL_MS     500
+#define TOKEN_REFRESH_MS     50UL * 60UL * 1000UL   // re-auth after 50 min
+
+MFRC522 rfid(SS_PIN, RST_PIN);
+Adafruit_SSD1306 display(SCREEN_W, SCREEN_H, &Wire, -1);
+WiFiClientSecure httpsClient;
+
+String idToken = "";
+unsigned long tokenIssuedAt = 0;
+bool enrollPending = false;
+
+/* ------------------------------------------------------------------ */
+/*  OLED helpers                                                       */
+/* ------------------------------------------------------------------ */
+
+void oledInit() {
+  Wire.begin(OLED_SDA, OLED_SCL);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+    Serial.println("OLED init failed");
+    return;
+  }
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.display();
+}
+
+void oledShow(const char *line1, const char *line2, const char *line3, const char *line4) {
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.println(line1);
+  display.println(line2);
+  display.println(line3);
+  if (line4) display.println(line4);
+  display.display();
+}
+
+void oledBig(const char *start, const char *line2, const char *line3) {
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setCursor(0, 0);
+  display.println(start);
+  display.setTextSize(1);
+  display.setCursor(0, 26);
+  display.println(line2);
+  display.println(line3);
+  display.display();
+}
+
+void beepOk() {
+  if (BUZZER_PIN < 0) return;
+  digitalWrite(BUZZER_PIN, HIGH); delay(120); digitalWrite(BUZZER_PIN, LOW);
+}
+void beepErr() {
+  if (BUZZER_PIN < 0) return;
+  digitalWrite(BUZZER_PIN, HIGH); delay(80); digitalWrite(BUZZER_PIN, LOW);
+  delay(80); digitalWrite(BUZZER_PIN, HIGH); delay(80); digitalWrite(BUZZER_PIN, LOW);
+}
+
+/* ------------------------------------------------------------------ */
+/*  WiFi + NTP                                                         */
+/* ------------------------------------------------------------------ */
+
+bool connectWifi() {
+  if (WiFi.status() == WL_CONNECTED) return true;
+  oledShow("Connect WiFi...", WIFI_SSID, "", nullptr);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) {
+    delay(300);
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("WiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
+    return true;
+  }
+  Serial.println("WiFi failed");
+  return false;
+}
+
+bool syncNtp() {
+  configTime(TZ_OFFSET_SEC, 0, "pool.ntp.org", "time.nist.gov");
+  unsigned long t0 = millis();
+  while (time(nullptr) < 100000 && millis() - t0 < 15000) {
+    delay(250);
+  }
+  bool ok = time(nullptr) >= 100000;
+  Serial.printf("NTP sync: %s\n", ok ? "ok" : "failed");
+  return ok;
+}
+
+/* ------------------------------------------------------------------ */
+/*  HTTPS helper                                                       */
+/* ------------------------------------------------------------------ */
+
+String firebaseRequest(const char *method, const String &url, const String &body) {
+  HTTPClient http;
+  httpsClient.setInsecure();   // skip TLS cert verification on the device
+  http.begin(httpsClient, url);
+  http.setTimeout(8000);
+  http.addHeader("Content-Type", "application/json");
+  int code = 0;
+  if (method[0] == 'P') code = http.PUT(body);          // PUT
+  else if (method[0] == 'G') code = http.GET();         // GET
+  else code = http.POST(body);                          // POST
+  String resp = (code > 0) ? http.getString() : "";
+  Serial.printf("[%s %s] code=%d\n", method, url.c_str(), code);
+  http.end();
+  if (code > 0 && code < 300) return resp;
+  Serial.printf("  error body: %s\n", resp.c_str());
+  return "";
+}
+
+/* ------------------------------------------------------------------ */
+/*  Firebase Auth (REST signInWithPassword)                            */
+/* ------------------------------------------------------------------ */
+
+bool getAuthToken() {
+  if (!syncNtp()) return false;             // token needs a sane clock
+  String url = String("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=") + FIREBASE_API_KEY;
+  String body = String("{\"email\":\"") + DEVICE_EMAIL +
+                "\",\"password\":\"" + DEVICE_PASSWORD +
+                "\",\"returnSecureToken\":true}";
+  String resp = firebaseRequest("POST", url, body);
+  if (resp.isEmpty()) return false;
+
+  StaticJsonDocument<512> doc;
+  if (deserializeJson(doc, resp)) return false;
+  idToken = doc["idToken"].as<String>();
+  tokenIssuedAt = millis();
+  return idToken.length() > 0;
+}
+
+bool needToken() {
+  return idToken.isEmpty() || (millis() - tokenIssuedAt) > TOKEN_REFRESH_MS;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Firebase DB helpers                                                */
+/* ------------------------------------------------------------------ */
+
+String scanPath(const String &scanId) {
+  return String(FIREBASE_DB_URL) + "/schools/" + SCHOOL_ID +
+         "/devices/" + DEVICE_ID + "/scans/" + scanId + ".json?auth=" + idToken;
+}
+String responsePath(const String &scanId) {
+  return String(FIREBASE_DB_URL) + "/schools/" + SCHOOL_ID +
+         "/devices/" + DEVICE_ID + "/responses/" + scanId + ".json?auth=" + idToken;
+}
+String enrollPath() {
+  return String(FIREBASE_DB_URL) + "/schools/" + SCHOOL_ID +
+         "/devices/" + DEVICE_ID + "/enrollCommand.json?auth=" + idToken;
+}
+
+// A pending enrollCommand is a non-empty JSON object. Missing node -> "null".
+bool checkEnrollPending() {
+  String resp = firebaseRequest("GET", enrollPath(), "");
+  enrollPending = resp.startsWith("{") && resp.length() > 2;
+  return enrollPending;
+}
+
+/* ------------------------------------------------------------------ */
+/*  MFRC522 / card reading                                             */
+/* ------------------------------------------------------------------ */
+
+String formatUid() {
+  String uid = "";
+  for (byte i = 0; i < rfid.uid.size; i++) {
+    if (rfid.uid.uidByte[i] < 0x10) uid += "0";
+    uid += String(rfid.uid.uidByte[i], HEX);
+    uid.toUpperCase();
+  }
+  return uid;
+}
+
+// Waits up to `timeoutMs` for a card (0 = wait forever), returns UID or "".
+String waitForCard(unsigned long timeoutMs) {
+  unsigned long t0 = millis();
+  while (timeoutMs == 0 || millis() - t0 < timeoutMs) {
+    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+      String uid = formatUid();
+      Serial.printf("Card detected: %s\n", uid.c_str());
+      rfid.PICC_HaltA();
+      rfid.PCD_StopCrypto1();
+      return uid;
+    }
+    delay(50);
+  }
+  return "";
+}
+
+/* ------------------------------------------------------------------ */
+/*  Attendance scan + response polling                                 */
+/* ------------------------------------------------------------------ */
+
+// Returns true when the backend answered and displays the result.
+bool submitScanAndWait(const String &tagUid, const char *type) {
+  unsigned long now = (unsigned long)time(nullptr) * 1000UL;
+
+  // Monotonic, lexicographically sortable scan id (backend keys on it).
+  static uint8_t seq = 0;
+  char scanId[16];
+  snprintf(scanId, sizeof scanId, "%010lu_%03u", (unsigned long)millis(), seq++);
+  String sid = String(scanId);
+
+  String body = String("{\"tagUid\":\"") + tagUid +
+                "\",\"ts\":" + now +
+                ",\"type\":\"" + type + "\"}";
+
+  oledShow("Sending scan...", tagUid.c_str(), "please wait", nullptr);
+  String putResp = firebaseRequest("PUT", scanPath(sid), body);
+  if (putResp.isEmpty()) {
+    oledBig("FAIL", "no network", "check WiFi");
+    beepErr();
+    return false;
+  }
+
+  Serial.printf("Scan %s submitted (%s), waiting for response...\n", sid.c_str(), type);
+
+  // Poll the response node until the worker fills it in.
+  unsigned long t0 = millis();
+  while (millis() - t0 < RESPONSE_TIMEOUT_MS) {
+    String resp = firebaseRequest("GET", responsePath(sid), "");
+    if (!resp.isEmpty()) {
+      StaticJsonDocument<384> doc;
+      if (deserializeJson(doc, resp) == DeserializationError::Ok && !doc["ok"].isNull()) {
+        bool ok = doc["ok"].as<bool>();
+        String msg = doc["message"].as<String>();
+        Serial.printf("Response: ok=%d msg=%s\n", ok ? 1 : 0, msg.c_str());
+        if (ok) {
+          oledBig("PRESENT", msg.c_str(), "");
+          beepOk();
+        } else {
+          oledBig("MISSED", msg.c_str(), "");
+          beepErr();
+        }
+        delay(2500);           // hold result on screen
+        return true;
+      }
+    }
+    delay(POLL_INTERVAL_MS);
+  }
+
+  oledBig("TIMEOUT", "no backend", "response");
+  beepErr();
+  return false;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Main loop stages                                                   */
+/* ------------------------------------------------------------------ */
+
+void setup() {
+  Serial.begin(115200);
+  if (BUZZER_PIN >= 0) pinMode(BUZZER_PIN, OUTPUT);
+
+  delay(100);
+  oledInit();
+
+  pinMode(SS_PIN, OUTPUT);          // RC522
+  SPI.begin();                      // ESP8266 SPI pins are fixed: SCK=14 MOSI=13 MISO=12
+  rfid.PCD_Init();
+  delay(10);
+  Serial.println("RFID ready");
+
+  oledShow("AttendoR Device", "booting...", "", nullptr);
+}
+
+void loop() {
+  // --- keep WiFi up ---
+  if (!connectWifi()) {
+    oledShow("No WiFi", "retrying...", "", nullptr);
+    delay(2000);
+    return;
+  }
+
+  // --- (re)authenticate when needed ---
+  if (needToken()) {
+    oledShow("Signing in", "to Firebase...", "", nullptr);
+    if (!getAuthToken()) {
+      oledShow("Auth failed", "check creds", "", nullptr);
+      delay(3000);
+      return;
+    }
+  }
+
+  // --- check whether a card assignment ('enroll') is pending ---
+  checkEnrollPending();             // sets global enrollPending
+
+  // --- prompt & wait for a card ---
+  oledShow("Scan your card",
+           enrollPending ? "MODE: ENROLL" : "MODE: ATTEND",
+           "", nullptr);
+
+  String tagUid = waitForCard(0);   // wait forever until a card is tapped
+  if (tagUid.isEmpty()) return;
+
+  if (enrollPending) {
+    submitScanAndWait(tagUid, "enroll");
+  } else {
+    submitScanAndWait(tagUid, "attend");
+  }
+
+  delay(500);                       // debounce before next read
+}
