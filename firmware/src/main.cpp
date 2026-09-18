@@ -35,6 +35,7 @@ WiFiClientSecure secureClient;
 
 #if OLED_ENABLED
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ OLED_SCL_PIN, /* data=*/ OLED_SDA_PIN);
+bool oledPresent = false;
 #endif
 
 String token = "";
@@ -155,6 +156,7 @@ void oledStatusBar(const String &left, const String &right) {
 
 // --- Screen functions ---
 void oledBootScreen() {
+  if (!oledPresent) return;
   display.clearDisplay();
   display.setFont(u8g2_font_7x14B_tf);
   display.drawStr(28, 16, "ATTENDOR");
@@ -165,6 +167,7 @@ void oledBootScreen() {
 }
 
 void oledBootStep(int step, int total, const String &label, bool ok) {
+  if (!oledPresent) return;
   int y = 14 + step * 7;
   if (y > 54) y = 54;
   display.setFont(u8g2_font_5x7_tr);
@@ -176,6 +179,7 @@ void oledBootStep(int step, int total, const String &label, bool ok) {
 }
 
 void oledReady(const String &className, const String &mac) {
+  if (!oledPresent) { logLine("INFO", "TAP CARD"); return; }
   display.clearDisplay();
   oledStatusBar("READY", className.length() ? className : "UNLINKED");
   display.setFont(u8g2_font_7x14B_tf);
@@ -192,6 +196,7 @@ void oledPairQR() {
 }
 
 void oledScanning(const String &uid) {
+  if (!oledPresent) { logLine("INFO", "SCANNING " + uid); return; }
   display.clearDisplay();
   oledStatusBar("SCANNING", "");
   display.setFont(u8g2_font_7x14B_tf);
@@ -202,6 +207,7 @@ void oledScanning(const String &uid) {
 }
 
 void oledResult(bool ok, const String &title, const String &msg) {
+  if (!oledPresent) { logLine(ok ? "INFO" : "WARN", title + " " + msg); return; }
   display.clearDisplay();
   oledStatusBar(ok ? "OK" : "FAIL", "");
   if (ok) oledDrawCheck(50, 18);
@@ -219,6 +225,7 @@ void oledResult(bool ok, const String &title, const String &msg) {
 }
 
 void oledOffline(const String &uid) {
+  if (!oledPresent) { logLine("WARN", "OFFLINE scan queued " + uid); return; }
   display.clearDisplay();
   oledStatusBar("OFFLINE", "");
   display.setFont(u8g2_font_7x14B_tf);
@@ -231,6 +238,7 @@ void oledOffline(const String &uid) {
 }
 
 void oledEnroll() {
+  if (!oledPresent) { logLine("INFO", "ENROLL mode - scan student card"); return; }
   display.clearDisplay();
   oledStatusBar("ENROLL", "assign card");
   display.setFont(u8g2_font_7x14B_tf);
@@ -241,6 +249,7 @@ void oledEnroll() {
 }
 
 void oledLinked(const String &classId) {
+  if (!oledPresent) { logLine("INFO", "LINKED to class " + classId); return; }
   display.clearDisplay();
   oledStatusBar("LINKED", "");
   display.setFont(u8g2_font_7x14B_tf);
@@ -254,6 +263,7 @@ void oledLinked(const String &classId) {
 }
 
 void oledWifiLost() {
+  if (!oledPresent) { logLine("WARN", "WiFi LOST, reconnecting"); return; }
   display.clearDisplay();
   oledStatusBar("WiFi", "reconnecting");
   display.setFont(u8g2_font_7x14B_tf);
@@ -265,6 +275,10 @@ void oledWifiLost() {
 
 void show(int size, const String &line1, const String &line2 = "") {
   (void)size;
+  if (!oledPresent) {
+    logLine("INFO", line1 + (line2.length() ? " " + line2 : ""));
+    return;
+  }
   display.clearDisplay();
   display.setFont(u8g2_font_5x7_tr);
   display.drawStr(0, 12, line1.c_str());
@@ -506,6 +520,7 @@ void saveLink(const String &schoolId, const String &classId) {
 
 #if OLED_ENABLED
 void showPairQr() {
+  if (!oledPresent) { logLine("INFO", "PAIR CODE: " + MAC_ID); return; }
   QRCode qr;
   uint8_t buf[qrcode_getBufferSize(2)];
   qrcode_initText(&qr, buf, 2, ECC_LOW, MAC_ID.c_str());
@@ -581,18 +596,20 @@ void setup() {
 #if OLED_ENABLED
   const int BOOT_STEPS = 7;
   Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
-  bool oledOk = display.begin();
-  if (!oledOk) {
-    logLine("WARN", "OLED init failed");
+  oledPresent = display.begin();
+  if (!oledPresent) {
+    logLine("WARN", "OLED not detected, running headless");
   }
-  if (oledOk) oledBootScreen();
+  if (oledPresent) oledBootScreen();
 #endif
 
   // Step 1: OLED
 #if OLED_ENABLED
-  if (oledOk) {
+  if (oledPresent) {
     oledBootStep(0, BOOT_STEPS, "OLED", true);
     delay(300);
+  } else {
+    logLine("INFO", "Step 1/7 OLED  [SKIP]");
   }
 #endif
 
@@ -605,14 +622,14 @@ void setup() {
   #endif
   mfrc522.PCD_Init();
 #if OLED_ENABLED
-  if (oledOk) { oledBootStep(1, BOOT_STEPS, "RFID", true); delay(300); }
+  if (oledPresent) { oledBootStep(1, BOOT_STEPS, "RFID", true); delay(300); }
 #endif
 
   // Step 3: Storage
   bool storageOk = storageBegin();
   if (!storageOk) logLine("WARN", "storage init failed");
 #if OLED_ENABLED
-  if (oledOk) { oledBootStep(2, BOOT_STEPS, "Storage", storageOk); delay(300); }
+  if (oledPresent) { oledBootStep(2, BOOT_STEPS, "Storage", storageOk); delay(300); }
 #endif
 
   // Step 4: WiFi
@@ -628,7 +645,7 @@ void setup() {
   }
   bool wifiOk = WiFi.status() == WL_CONNECTED;
 #if OLED_ENABLED
-  if (oledOk) {
+  if (oledPresent) {
     oledBootStep(3, BOOT_STEPS, wifiOk ? WiFi.localIP().toString().c_str() : "WiFi FAILED", wifiOk);
     delay(500);
   }
@@ -644,14 +661,14 @@ void setup() {
     }
     timeValid = time(nullptr) >= 100000;
 #if OLED_ENABLED
-    if (oledOk) { oledBootStep(4, BOOT_STEPS, timeValid ? "NTP synced" : "NTP FAILED", timeValid); delay(300); }
+    if (oledPresent) { oledBootStep(4, BOOT_STEPS, timeValid ? "NTP synced" : "NTP FAILED", timeValid); delay(300); }
 #endif
     logLine(timeValid ? "INFO" : "WARN", timeValid ? "NTP synced" : "NTP not synced");
 
     // Step 6: Firebase auth
     bool authOk = signIn();
 #if OLED_ENABLED
-    if (oledOk) { oledBootStep(5, BOOT_STEPS, authOk ? "Firebase" : "Auth FAILED", authOk); delay(300); }
+    if (oledPresent) { oledBootStep(5, BOOT_STEPS, authOk ? "Firebase" : "Auth FAILED", authOk); delay(300); }
 #endif
     if (!authOk) logLine("ERROR", "firebase sign-in failed at boot");
   } else {
@@ -670,7 +687,7 @@ void setup() {
     logLine("INFO", "UNLINKED - PAIR CODE: " + MAC_ID);
   }
 #if OLED_ENABLED
-  if (oledOk) {
+  if (oledPresent) {
     oledBootStep(6, BOOT_STEPS, linked ? linkedClass.c_str() : "PAIR CODE", linked);
     delay(800);
   }
@@ -678,7 +695,7 @@ void setup() {
 
   // Final ready screen
 #if OLED_ENABLED
-  if (oledOk) {
+  if (oledPresent) {
     if (linked) {
       oledLinked(linkedClass);
     } else {
