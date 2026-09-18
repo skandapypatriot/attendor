@@ -40,6 +40,7 @@ class Processor:
             for did, device in devices.items():
                 try:
                     self._process_device(sid, did, device, school, tz_name)
+                    self._process_device_logs(sid, did)
                 except Exception as exc:
                     log("error", f"device {did} failed: {exc}")
 
@@ -88,6 +89,17 @@ class Processor:
             except Exception as exc:
                 log("error", f"scan {scan_id} failed: {exc}")
         ref(f"_meta/processedScans/{did}").set(pending_keys[-1])
+
+    def _process_device_logs(self, sid, did):
+        logs_ref = ref(f"schools/{sid}/devices/{did}/logs")
+        logs = logs_ref.get() or {}
+        for key, entry in logs.items():
+            level = str(entry.get("level", "info")).lower()
+            if level not in ("info", "warn", "error"):
+                level = "info"
+            log(level, f"[device {did}] {entry.get('message', '')}")
+        if logs:
+            logs_ref.delete()
 
     def _process_scan(self, sid, did, cid, class_node, scan_id, scan, school, tz_name):
         tag = scan.get("tagUid")

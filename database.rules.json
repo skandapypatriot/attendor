@@ -87,6 +87,10 @@
             "authEmail": {
               ".read": "auth != null && (auth.uid === $did || root.child('schools').child($sid).child('admins').child(auth.uid).exists())",
               ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
+            },
+            "logs": {
+              ".read": "auth != null && (auth.uid === $did || root.child('schools').child($sid).child('admins').child(auth.uid).exists())",
+              ".write": "auth != null && (auth.uid === $did || root.child('schools').child($sid).child('admins').child(auth.uid).exists())"
             }
           }
         },
