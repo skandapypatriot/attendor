@@ -5,226 +5,353 @@ import '../services/auth_service.dart';
 import '../services/db_service.dart';
 
 class RegisterScreen extends StatefulWidget {
-  const RegisterScreen({super.key});
+  final bool initialIsTeacher;
+
+  const RegisterScreen({super.key, this.initialIsTeacher = false});
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
 }
 
 class _RegisterScreenState extends State<RegisterScreen> {
-  final _code = TextEditingController();
-  final _name = TextEditingController();
-  final _email = TextEditingController();
-  final _password = TextEditingController();
+  late bool _isTeacher;
+  final _codeController = TextEditingController();
+  final _nameController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+
+  bool _obscurePassword = true;
   bool _busy = false;
   String? _error;
-  bool _isTeacher = false;
 
-  Future<void> _register() async {
+  @override
+  void initState() {
+    super.initState();
+    _isTeacher = widget.initialIsTeacher;
+  }
+
+  @override
+  void dispose() {
+    _codeController.dispose();
+    _nameController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final code = _codeController.text.trim();
+    final name = _nameController.text.trim();
+    final email = _emailController.text.trim();
+    final password = _passwordController.text;
+
+    if (code.isEmpty || name.isEmpty || email.isEmpty || password.isEmpty) {
+      setState(() => _error = 'Please fill in all fields.');
+      return;
+    }
+
+    if (password.length < 6) {
+      setState(() => _error = 'Password must be at least 6 characters long.');
+      return;
+    }
+
     setState(() {
       _busy = true;
       _error = null;
     });
-    if (_isTeacher) {
-      final db = context.read<DbService>();
-      final error = await db.registerTeacherWithCode(
-        code: _code.text,
-        name: _name.text,
-        email: _email.text,
-        password: _password.text,
-      );
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _error = error.isEmpty ? null : error;
-        });
-        if (error.isEmpty) {
-          await context.read<AuthService>().loadMeta();
-          if (mounted) Navigator.of(context).pop();
-        }
-      }
-    } else {
+
+    try {
       final auth = context.read<AuthService>();
-      final error = await auth.registerStudent(
-        code: _code.text,
-        name: _name.text,
-        email: _email.text,
-        password: _password.text,
-      );
-      if (mounted) {
+      final db = context.read<DbService>();
+
+      String err = '';
+      if (_isTeacher) {
+        err = await auth.registerTeacher(
+          code: code,
+          name: name,
+          email: email,
+          password: password,
+          db: db,
+        );
+      } else {
+        err = await auth.registerStudent(
+          code: code,
+          name: name,
+          email: email,
+          password: password,
+          db: db,
+        );
+      }
+
+      if (!mounted) return;
+
+      if (err.isNotEmpty) {
         setState(() {
           _busy = false;
-          _error = error.isEmpty ? null : error;
+          _error = err;
         });
-        if (error.isEmpty) {
-          await auth.loadMeta();
-          if (mounted) Navigator.of(context).pop();
-        }
+      } else {
+        // Success! Pop back so RoleGate routes to appropriate dashboard
+        Navigator.of(context).popUntil((route) => route.isFirst);
       }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e.toString().replaceAll('Exception:', '').trim();
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
     return Scaffold(
       appBar: AppBar(
-        flexibleSpace: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [cs.primary, cs.tertiary],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
+        backgroundColor: Colors.white,
+        title: Text(
+          _isTeacher ? 'Teacher Registration' : 'Student Registration',
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
         ),
-        title: const Text('Join Attendor', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-        iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(
-                  width: 72,
-                  height: 72,
-                  margin: const EdgeInsets.only(bottom: 16),
-                  decoration: BoxDecoration(
-                    color: cs.primaryContainer,
-                    shape: BoxShape.circle,
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: Container(
+              padding: const EdgeInsets.all(32),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 20,
+                    offset: const Offset(0, 10),
                   ),
-                  alignment: Alignment.center,
-                  child: Icon(_isTeacher ? Icons.school_outlined : Icons.vpn_key_rounded, size: 36, color: cs.onPrimaryContainer),
-                ),
-                Text(
-                  _isTeacher ? 'Register as a teacher' : 'Enter your entry code',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _isTeacher
-                      ? 'Ask your admin for a teacher join code, then fill in your details below.'
-                      : 'Ask your teacher or admin for the class entry code, then fill in your details below.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(height: 1.5, color: cs.onSurfaceVariant),
-                ),
-                const SizedBox(height: 20),
-                // Role toggle
-                Container(
-                  decoration: BoxDecoration(
-                    color: cs.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  padding: const EdgeInsets.all(4),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: GestureDetector(
-                          onTap: () => setState(() {
-                            _isTeacher = false;
-                            _error = null;
-                          }),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            decoration: BoxDecoration(
-                              color: !_isTeacher ? cs.primary : Colors.transparent,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.person_outlined, size: 18, color: !_isTeacher ? cs.onPrimary : cs.onSurfaceVariant),
-                                const SizedBox(width: 6),
-                                Text('Student', style: TextStyle(fontWeight: FontWeight.w600, color: !_isTeacher ? cs.onPrimary : cs.onSurfaceVariant)),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                      Expanded(
-                        child: GestureDetector(
-                          onTap: () => setState(() {
-                            _isTeacher = true;
-                            _error = null;
-                          }),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            decoration: BoxDecoration(
-                              color: _isTeacher ? cs.primary : Colors.transparent,
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.school_outlined, size: 18, color: _isTeacher ? cs.onPrimary : cs.onSurfaceVariant),
-                                const SizedBox(width: 6),
-                                Text('Teacher', style: TextStyle(fontWeight: FontWeight.w600, color: _isTeacher ? cs.onPrimary : cs.onSurfaceVariant)),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 24),
-                TextField(
-                  controller: _code,
-                  decoration: InputDecoration(
-                    labelText: _isTeacher ? 'Teacher join code' : 'Entry code',
-                    prefixIcon: const Icon(Icons.vpn_key_outlined),
-                    hintText: 'e.g. ABC123',
-                  ),
-                  textCapitalization: TextCapitalization.characters,
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _name,
-                  decoration: const InputDecoration(labelText: 'Full name', prefixIcon: Icon(Icons.person_outlined)),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _email,
-                  decoration: const InputDecoration(labelText: 'Email', prefixIcon: Icon(Icons.email_outlined)),
-                  keyboardType: TextInputType.emailAddress,
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _password,
-                  decoration: const InputDecoration(labelText: 'Password', prefixIcon: Icon(Icons.lock_outlined)),
-                  obscureText: true,
-                ),
-                if (_error != null) ...[
-                  const SizedBox(height: 16),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Role Toggle Tabs
                   Container(
-                    padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: cs.errorContainer,
+                      color: const Color(0xFFF1F5F9),
                       borderRadius: BorderRadius.circular(12),
                     ),
+                    padding: const EdgeInsets.all(4),
                     child: Row(
                       children: [
-                        Icon(Icons.error_outline, color: cs.onErrorContainer, size: 20),
-                        const SizedBox(width: 8),
-                        Expanded(child: Text(_error!, style: TextStyle(color: cs.onErrorContainer, fontSize: 13))),
+                        Expanded(
+                          child: InkWell(
+                            onTap: _busy ? null : () => setState(() {
+                              _isTeacher = false;
+                              _error = null;
+                            }),
+                            borderRadius: BorderRadius.circular(10),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              decoration: BoxDecoration(
+                                color: !_isTeacher ? Colors.white : Colors.transparent,
+                                borderRadius: BorderRadius.circular(10),
+                                boxShadow: !_isTeacher
+                                    ? [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 4)]
+                                    : null,
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.person_rounded,
+                                    size: 18,
+                                    color: !_isTeacher ? cs.primary : const Color(0xFF64748B),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Student Portal',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: !_isTeacher ? cs.primary : const Color(0xFF64748B),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: InkWell(
+                            onTap: _busy ? null : () => setState(() {
+                              _isTeacher = true;
+                              _error = null;
+                            }),
+                            borderRadius: BorderRadius.circular(10),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              decoration: BoxDecoration(
+                                color: _isTeacher ? Colors.white : Colors.transparent,
+                                borderRadius: BorderRadius.circular(10),
+                                boxShadow: _isTeacher
+                                    ? [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 4)]
+                                    : null,
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.school_rounded,
+                                    size: 18,
+                                    color: _isTeacher ? Colors.amber.shade800 : const Color(0xFF64748B),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Teacher Portal',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: _isTeacher ? Colors.amber.shade800 : const Color(0xFF64748B),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                   ),
+
+                  const SizedBox(height: 24),
+
+                  // Header icon & description
+                  Center(
+                    child: Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: _isTeacher ? const Color(0xFFFEF3C7) : const Color(0xFFEFF6FF),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        _isTeacher ? Icons.assignment_ind_rounded : Icons.vpn_key_rounded,
+                        color: _isTeacher ? const Color(0xFFD97706) : const Color(0xFF2563EB),
+                        size: 28,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    _isTeacher ? 'Join as Class Teacher' : 'Join as Student',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _isTeacher
+                      ? 'Enter the Teacher Join Code provided by your school admin'
+                      : 'Enter the Class Student Entry Code provided by your teacher',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 13, color: Color(0xFF64748B)),
+                  ),
+
+                  const SizedBox(height: 24),
+
+                  // Code Field
+                  TextField(
+                    controller: _codeController,
+                    textCapitalization: TextCapitalization.characters,
+                    decoration: InputDecoration(
+                      labelText: _isTeacher ? 'Teacher Join Code' : 'Student Entry Code',
+                      hintText: _isTeacher ? 'e.g. TCH-A8B9C' : 'e.g. STU-K2M9P',
+                      prefixIcon: const Icon(Icons.pin_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Name Field
+                  TextField(
+                    controller: _nameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Full Name',
+                      prefixIcon: Icon(Icons.person_outline_rounded),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Email Field
+                  TextField(
+                    controller: _emailController,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: const InputDecoration(
+                      labelText: 'Email Address',
+                      prefixIcon: Icon(Icons.email_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Password Field
+                  TextField(
+                    controller: _passwordController,
+                    obscureText: _obscurePassword,
+                    decoration: InputDecoration(
+                      labelText: 'Password',
+                      prefixIcon: const Icon(Icons.lock_outline_rounded),
+                      suffixIcon: IconButton(
+                        icon: Icon(_obscurePassword ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+                        onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                      ),
+                    ),
+                  ),
+
+                  // Error banner
+                  if (_error != null) ...[
+                    const SizedBox(height: 16),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFEF2F2),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFFFECACA)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.error_outline_rounded, color: Color(0xFFDC2626), size: 20),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _error!,
+                              style: const TextStyle(color: Color(0xFFB91C1C), fontSize: 13),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+
+                  const SizedBox(height: 28),
+
+                  // Submit Button
+                  FilledButton(
+                    onPressed: _busy ? null : _submit,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _isTeacher ? const Color(0xFFD97706) : cs.primary,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                    child: _busy
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : Text(_isTeacher ? 'Register & Claim Class' : 'Register & Join Class'),
+                  ),
                 ],
-                const SizedBox(height: 28),
-                FilledButton(
-                  onPressed: _busy ? null : _register,
-                  child: _busy
-                      ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                      : Text(_isTeacher ? 'Register as teacher' : 'Register & join class'),
-                ),
-              ],
+              ),
             ),
           ),
         ),

@@ -11,199 +11,266 @@ class HomeScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final width = MediaQuery.of(context).size.width;
+    final isDesktop = width > 800;
+
     return Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          child: Column(
-            children: [
-              // ── Hero header ──
-              Container(
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [cs.primary, cs.tertiary],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                ),
-                padding: const EdgeInsets.fromLTRB(24, 48, 24, 40),
-                child: Column(
-                  children: [
-                    Container(
-                      width: 88,
-                      height: 88,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.2),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.badge_outlined, size: 48, color: Colors.white),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Attendor',
-                      style: TextStyle(
-                        fontSize: 36,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Smart RFID attendance for schools',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: Colors.white.withValues(alpha: 0.9),
-                      ),
-                    ),
-                  ],
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: cs.primary,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.badge_rounded, color: Colors.white, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'Attendor',
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: const Color(0xFF0F172A),
+                letterSpacing: -0.5,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => _push(context, const LoginScreen()),
+            child: const Text('Sign in'),
+          ),
+          const SizedBox(width: 8),
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: FilledButton(
+              onPressed: () => _push(context, const CreateSchoolScreen()),
+              child: const Text('New School'),
+            ),
+          ),
+        ],
+      ),
+      body: SingleChildScrollView(
+        child: Column(
+          children: [
+            // ── Hero Section ──
+            Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [const Color(0xFF1E3A8A), const Color(0xFF2563EB), const Color(0xFF3B82F6)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
               ),
-
-              // ── Content ──
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
+              padding: EdgeInsets.symmetric(
+                horizontal: isDesktop ? 64 : 24,
+                vertical: isDesktop ? 64 : 40,
+              ),
+              child: Center(
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 600),
+                  constraints: const BoxConstraints(maxWidth: 900),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const SizedBox(height: 24),
-
-                      // What is Attendor card
-                      Card(
-                        child: Padding(
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(Icons.info_outline, color: cs.primary),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    'What is Attendor?',
-                                    style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
-                                  ),
-                                ],
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.sensors_rounded, color: Colors.amberAccent, size: 18),
+                            const SizedBox(width: 8),
+                            Text(
+                              'ESP32 & ESP8266 RFID Attendance Cloud',
+                              style: theme.textTheme.labelMedium?.copyWith(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
                               ),
-                              const SizedBox(height: 12),
-                              Text(
-                                'Attendor runs an attendance kiosk at the door of every class. '
-                                'Students tap their RFID card on the reader and their presence is '
-                                'recorded automatically in the school\'s timetable windows '
-                                '(e.g. the morning and afternoon entry periods). No registers, '
-                                'no roll calls. Each class device is linked permanently to its '
-                                'class using a QR code / pairing code and its hardware MAC address.',
-                                style: TextStyle(height: 1.5, color: cs.onSurfaceVariant),
-                              ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       ),
                       const SizedBox(height: 20),
-
-                      // Feature cards
                       Text(
-                        'Features',
-                        style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(height: 12),
-                      _FeatureCard(
-                        icon: Icons.sensors,
-                        title: 'Class devices',
-                        text: 'ESP8266 + RFID readers show live status on each classroom door.',
-                      ),
-                      _FeatureCard(
-                        icon: Icons.history_toggle_off,
-                        title: 'Automatic attendance',
-                        text: 'Presence is counted in the configured AM / PM windows.',
-                      ),
-                      _FeatureCard(
-                        icon: Icons.qr_code_2,
-                        title: 'Easy device pairing',
-                        text: 'Scan the device\'s screen QR to link it to a class forever.',
-                      ),
-                      _FeatureCard(
-                        icon: Icons.verified_user,
-                        title: 'Three roles',
-                        text: 'Admins run the school, teachers run their class, students join with an entry code.',
-                      ),
-                      const SizedBox(height: 28),
-
-                      // ── Action buttons ──
-                      FilledButton.icon(
-                        onPressed: () => _push(context, const LoginScreen()),
-                        icon: const Icon(Icons.login_rounded),
-                        label: const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 12),
-                          child: Text('Sign in'),
+                        'School Attendance,\nAutomated at the Door',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: isDesktop ? 44 : 30,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                          height: 1.15,
+                          letterSpacing: -1,
                         ),
                       ),
-                      const SizedBox(height: 12),
-                      OutlinedButton.icon(
-                        onPressed: () => _push(context, const CreateSchoolScreen()),
-                        icon: const Icon(Icons.school_outlined),
-                        label: const Text('Create a school'),
-                      ),
-                      const SizedBox(height: 12),
-                      TextButton.icon(
-                        onPressed: () => _push(context, const RegisterScreen()),
-                        icon: const Icon(Icons.person_add_alt),
-                        label: const Text('Join as a student (with entry code)'),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Classroom RFID tap readers with instant OLED screen feedback. '
+                        'Separate access codes for students and teachers for effortless self-onboarding.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: isDesktop ? 18 : 15,
+                          color: Colors.white.withValues(alpha: 0.9),
+                          height: 1.5,
+                        ),
                       ),
                       const SizedBox(height: 32),
+                      Wrap(
+                        spacing: 16,
+                        runSpacing: 12,
+                        alignment: WrapAlignment.center,
+                        children: [
+                          FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: Colors.white,
+                              foregroundColor: const Color(0xFF1D4ED8),
+                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                            ),
+                            onPressed: () => _push(context, const RegisterScreen(initialIsTeacher: false)),
+                            icon: const Icon(Icons.person_add_alt_1_rounded),
+                            label: const Text('Join as Student (Entry Code)'),
+                          ),
+                          FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: Colors.amberAccent,
+                              foregroundColor: const Color(0xFF0F172A),
+                              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                            ),
+                            onPressed: () => _push(context, const RegisterScreen(initialIsTeacher: true)),
+                            icon: const Icon(Icons.school_rounded),
+                            label: const Text('Join as Teacher (Teacher Code)'),
+                          ),
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              side: const BorderSide(color: Colors.white70),
+                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                            ),
+                            onPressed: () => _push(context, const LoginScreen()),
+                            icon: const Icon(Icons.login_rounded),
+                            label: const Text('Admin / Sign in'),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
               ),
-            ],
-          ),
+            ),
+
+            // ── Portal Entry Cards ──
+            Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: isDesktop ? 64 : 20,
+                vertical: 36,
+              ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1000),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Select Your Portal',
+                      style: theme.textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF0F172A),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Log in to your dashboard or join a class using your designated code',
+                      style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF64748B)),
+                    ),
+                    const SizedBox(height: 24),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final isWide = constraints.maxWidth > 700;
+                        if (isWide) {
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: _buildStudentCard(context)),
+                              const SizedBox(width: 16),
+                              Expanded(child: _buildTeacherCard(context)),
+                              const SizedBox(width: 16),
+                              Expanded(child: _buildAdminCard(context)),
+                            ],
+                          );
+                        } else {
+                          return Column(
+                            children: [
+                              _buildStudentCard(context),
+                              const SizedBox(height: 16),
+                              _buildTeacherCard(context),
+                              const SizedBox(height: 16),
+                              _buildAdminCard(context),
+                            ],
+                          );
+                        }
+                      },
+                    ),
+
+                    const SizedBox(height: 48),
+
+                    // ── How It Works Grid ──
+                    Text(
+                      'Hardware & Cloud Architecture',
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF0F172A),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _buildArchitectureSection(context),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  void _push(BuildContext context, Widget page) {
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
-  }
-}
-
-class _FeatureCard extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String text;
-
-  const _FeatureCard({required this.icon, required this.title, required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+  Widget _buildStudentCard(BuildContext context) {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
+        padding: const EdgeInsets.all(24),
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              width: 44,
-              height: 44,
+              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: cs.primaryContainer,
+                color: const Color(0xFFEFF6FF),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(icon, color: cs.onPrimaryContainer, size: 24),
+              child: const Icon(Icons.person_rounded, color: Color(0xFF2563EB), size: 28),
             ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+            const SizedBox(height: 16),
+            const Text(
+              'Student Portal',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Use your class entry code to register. Tap your RFID badge at the door reader and track your daily AM/PM attendance.',
+              style: TextStyle(fontSize: 14, color: Color(0xFF64748B), height: 1.4),
+            ),
+            const SizedBox(height: 20),
+            FilledButton.tonal(
+              onPressed: () => _push(context, const RegisterScreen(initialIsTeacher: false)),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(
-                    title,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(text, style: TextStyle(height: 1.4, color: cs.onSurfaceVariant)),
+                  Text('Student Sign Up'),
+                  SizedBox(width: 6),
+                  Icon(Icons.arrow_forward_rounded, size: 16),
                 ],
               ),
             ),
@@ -211,5 +278,151 @@ class _FeatureCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Widget _buildTeacherCard(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEF3C7),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.school_rounded, color: Color(0xFFD97706), size: 28),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Teacher Portal',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Use your teacher join code to claim assigned classes. View live classroom roster, close attendance sessions, and pair student RFID badges.',
+              style: TextStyle(fontSize: 14, color: Color(0xFF64748B), height: 1.4),
+            ),
+            const SizedBox(height: 20),
+            FilledButton.tonal(
+              onPressed: () => _push(context, const RegisterScreen(initialIsTeacher: true)),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text('Teacher Sign Up'),
+                  SizedBox(width: 6),
+                  Icon(Icons.arrow_forward_rounded, size: 16),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAdminCard(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.admin_panel_settings_rounded, color: Color(0xFF475569), size: 28),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'School Admin',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Manage classes, generate access codes, pair ESP32/ESP8266 devices via MAC address, and oversee school-wide attendance records.',
+              style: TextStyle(fontSize: 14, color: Color(0xFF64748B), height: 1.4),
+            ),
+            const SizedBox(height: 20),
+            FilledButton(
+              onPressed: () => _push(context, const LoginScreen()),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text('Admin Login'),
+                  SizedBox(width: 6),
+                  Icon(Icons.arrow_forward_rounded, size: 16),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildArchitectureSection(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            _buildArchRow(
+              icon: Icons.credit_card_rounded,
+              title: '1. Student Taps RFID Card on Reader',
+              desc: 'RC522 reads 13.56 MHz card UID. ESP32/ESP8266 shows "Scanning..." on the OLED screen and sends to RTDB.',
+            ),
+            const Divider(height: 28),
+            _buildArchRow(
+              icon: Icons.cloud_sync_rounded,
+              title: '2. Firebase RTDB & Worker Verification',
+              desc: 'Tag UID is matched to the enrolled student. AM/PM timetable window and session status are checked.',
+            ),
+            const Divider(height: 28),
+            _buildArchRow(
+              icon: Icons.tv_rounded,
+              title: '3. Instant Hardware Feedback & Live Roster',
+              desc: 'OLED screen instantly displays student name and "Present". Teacher dashboard roster updates in real time.',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildArchRow({required IconData icon, required String title, required String desc}) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF1F5F9),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, color: const Color(0xFF1D4ED8), size: 22),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+              const SizedBox(height: 4),
+              Text(desc, style: const TextStyle(color: Color(0xFF64748B), height: 1.4, fontSize: 13)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _push(BuildContext context, Widget page) {
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
   }
 }

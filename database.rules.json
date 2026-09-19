@@ -1,9 +1,18 @@
 {
   "rules": {
     "registrationCodes": {
+      ".read": true,
       "$code": {
         ".read": true,
-        ".write": false
+        ".write": "auth != null"
+      }
+    },
+
+    "teacherJoinCodes": {
+      ".read": true,
+      "$code": {
+        ".read": true,
+        ".write": "auth != null"
       }
     },
 
@@ -16,104 +25,89 @@
 
     "userMeta": {
       "$uid": {
-        ".read": "auth != null && auth.uid === $uid",
-        ".write": "auth != null && (auth.uid === $uid && !data.exists() && root.child('schools').child(newData.child('schoolId').val()).child('admins').child(auth.uid).exists() || root.child('schools').child(newData.child('schoolId').val()).child('admins').child(auth.uid).exists())"
+        ".read": "auth != null",
+        ".write": "auth != null && (auth.uid === $uid || root.child('schools').child(newData.child('schoolId').val()).child('admins').child(auth.uid).exists() || (data.exists() && root.child('schools').child(data.child('schoolId').val()).child('admins').child(auth.uid).exists()))"
       }
     },
 
     "devices": {
+      ".read": "auth != null",
       "$mac": {
-        ".read": "auth != null && (auth.token.mac === $mac || root.child('schools').child(root.child('devices').child($mac).child('schoolId').val()).child('admins').child(auth.uid).exists())",
-        ".write": false,
-        "schoolId": {
-          ".write": "auth != null && auth.token.mac === $mac"
-        },
-        "classId": {
-          ".write": "auth != null && auth.token.mac === $mac"
-        },
-        "label": {
-          ".write": "auth != null && auth.token.mac === $mac"
-        },
-        "presence": {
-          ".write": "auth != null && auth.token.mac === $mac"
-        },
-        "scans": {
-          ".write": "auth != null && auth.token.mac === $mac"
-        },
-        "responses": {
-          ".read": "auth != null && auth.token.mac === $mac",
-          ".write": false
-        },
-        "enrollCommand": {
-          ".read": "auth != null && auth.token.mac === $mac",
-          ".write": "auth != null && auth.token.mac === $mac"
-        },
-        "logs": {
-          ".read": "auth != null && auth.token.mac === $mac",
-          ".write": "auth != null && auth.token.mac === $mac"
-        }
+        ".read": "auth != null",
+        ".write": "auth != null",
+        "schoolId": { ".write": "auth != null" },
+        "classId": { ".write": "auth != null" },
+        "label": { ".write": "auth != null" },
+        "presence": { ".write": "auth != null" },
+        "scans": { ".write": "auth != null" },
+        "responses": { ".read": "auth != null", ".write": "auth != null" },
+        "enrollCommand": { ".read": "auth != null", ".write": "auth != null" },
+        "logs": { ".read": "auth != null", ".write": "auth != null" }
       }
     },
 
     "schools": {
       "$sid": {
-        ".write": "auth != null && !data.exists() && newData.child('admins').child(auth.uid).val() === true",
+        ".read": "auth != null",
+        ".write": "auth != null && (!data.exists() && newData.child('admins').child(auth.uid).val() === true || data.child('admins').child(auth.uid).exists())",
+        
         "admins": {
           ".read": true,
-          ".write": false
+          ".write": "auth != null && data.parent().child('admins').child(auth.uid).exists()"
         },
 
         "profile": {
-          ".read": "auth != null && (root.child('userMeta').child(auth.uid).child('schoolId').val() === $sid || root.child('schools').child($sid).child('admins').child(auth.uid).exists())",
+          ".read": "auth != null",
           ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
         },
 
         "teachers": {
+          ".read": "auth != null",
           "$uid": {
-            ".read": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || auth.uid === $uid)",
-            ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
+            ".read": "auth != null",
+            ".write": "auth != null && (auth.uid === $uid || root.child('schools').child($sid).child('admins').child(auth.uid).exists())"
           }
         },
 
         "students": {
+          ".read": "auth != null",
           "$uid": {
-            ".read": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || auth.uid === $uid || root.child('userMeta').child(auth.uid).child('role').val() === 'teacher' && root.child('userMeta').child(auth.uid).child('schoolId').val() === $sid && root.child('userMeta').child(auth.uid).child('classId').val() === root.child('schools').child($sid).child('students').child($uid).child('classId').val())",
-            ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
+            ".read": "auth != null",
+            ".write": "auth != null && (auth.uid === $uid || root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('teachers').child(auth.uid).exists())"
           }
         },
 
         "classes": {
+          ".read": "auth != null",
+          ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()",
           "$cid": {
-            ".read": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child($cid).child('teacherUid').val() === auth.uid || root.child('schools').child($sid).child('classes').child($cid).child('students').child(auth.uid).exists())",
-            ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child($cid).child('teacherUid').val() === auth.uid)",
-            "sessions": {
-              ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child($cid).child('teacherUid').val() === auth.uid)"
-            },
+            ".read": "auth != null",
+            ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || data.child('teacherUids').child(auth.uid).exists() || data.child('teacherUid').val() === auth.uid)",
             "students": {
-              ".write": "auth != null && root.child('schools').child($sid).child('admins').child(auth.uid).exists()"
+              ".write": "auth != null"
+            },
+            "teacherUids": {
+              ".write": "auth != null"
+            },
+            "sessions": {
+              ".write": "auth != null"
             }
           }
         },
 
         "attendance": {
+          ".read": "auth != null",
           "$cid": {
-            "$date": {
-              "$uid": {
-                ".read": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child($cid).child('teacherUid').val() === auth.uid || auth.uid === $uid)",
-                ".write": false
-              }
-            }
+            ".read": "auth != null",
+            ".write": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child($cid).child('teacherUids').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child($cid).child('teacherUid').val() === auth.uid)"
           }
         },
 
         "entryLogs": {
+          ".read": "auth != null",
           "$cid": {
-            "$date": {
-              "$logId": {
-                ".read": "auth != null && (root.child('schools').child($sid).child('admins').child(auth.uid).exists() || root.child('schools').child($sid).child('classes').child($cid).child('teacherUid').val() === auth.uid)",
-                ".write": false
-              }
-            }
+            ".read": "auth != null",
+            ".write": "auth != null"
           }
         }
       }
@@ -121,8 +115,8 @@
 
     "_meta": {
       "$key": {
-        ".read": false,
-        ".write": false
+        ".read": "auth != null",
+        ".write": "auth != null"
       }
     }
   }

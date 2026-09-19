@@ -4,7 +4,7 @@
 // OLED_ENABLED = 1 -> boot without any display attached
 // OLED_ENABLED = 0 -> 0.96" OLED 128x64 (SSD1306, I2C) gives feedback
 // In HEADLESS mode all on-device feedback is printed to Serial only.
-#define OLED_ENABLED 0
+#define OLED_ENABLED 1
 
 // ============ REMOTE LOGGING ============
 // Set to 1 to push device logs to Firebase; the Python worker's
@@ -49,7 +49,7 @@
 #define OLED_ADDR 0x3C
 
 // ============ BEHAVIOR ============
-#define SCAN_POST_TIMEOUT_MS 15000
-#define COMMAND_POLL_MS 5000
+#define SCAN_POST_TIMEOUT_MS 800
+#define COMMAND_POLL_MS 3000
 #define TOKEN_REFRESH_MS 300000
 #define QUEUE_MAX_ENTRIES 30

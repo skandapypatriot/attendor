@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
@@ -16,478 +17,256 @@ class TeacherScreen extends StatefulWidget {
 class _TeacherScreenState extends State<TeacherScreen> {
   late String _date;
   String? _selectedClassId;
-  List<ClassInfo> _myClasses = [];
-  bool _loadingClasses = true;
+  int _currentTab = 0;
 
   @override
   void initState() {
     super.initState();
     _date = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    _loadClasses();
-  }
-
-  Future<void> _loadClasses() async {
-    final db = context.read<DbService>();
-    final auth = context.read<AuthService>();
-    final sid = auth.meta!.schoolId;
-    final uid = auth.user!.uid;
-    // Fetch teacher's assigned classes from DB
-    final teacherSnap = await db.ref('${db.schoolPath(sid)}/teachers/$uid/classIds').get();
-    final classIds = teacherSnap.value is Map ? (teacherSnap.value as Map).keys.map((e) => e.toString()).toList() : <String>[];
-    final classes = <ClassInfo>[];
-    for (final cid in classIds) {
-      final snap = await db.ref('${db.schoolPath(sid)}/classes/$cid').get();
-      if (snap.exists && snap.value is Map) {
-        classes.add(ClassInfo.fromSnapshot(cid, snap.value));
-      }
-    }
-    if (mounted) {
-      setState(() {
-        _myClasses = classes;
-        _loadingClasses = false;
-        if (classes.isNotEmpty && _selectedClassId == null) {
-          _selectedClassId = classes.first.id;
-        }
-      });
-    }
   }
 
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthService>();
     final db = context.read<DbService>();
-    final sid = auth.meta!.schoolId;
-    final cs = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final meta = auth.meta;
+    final schoolId = meta?.schoolId ?? '';
+    final teacherUid = auth.user?.uid ?? '';
 
-    if (_loadingClasses) {
+    if (schoolId.isEmpty) {
       return Scaffold(
-        appBar: AppBar(
-          flexibleSpace: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [cs.primary, cs.tertiary], begin: Alignment.topLeft, end: Alignment.bottomRight),
-            ),
-          ),
-          title: const Text('My classes', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-          iconTheme: const IconThemeData(color: Colors.white),
-        ),
-        body: const Center(child: CircularProgressIndicator()),
-      );
-    }
-
-    if (_myClasses.isEmpty) {
-      return Scaffold(
-        appBar: AppBar(
-          flexibleSpace: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [cs.primary, cs.tertiary], begin: Alignment.topLeft, end: Alignment.bottomRight),
-            ),
-          ),
-          title: const Text('My classes', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-          iconTheme: const IconThemeData(color: Colors.white),
-          actions: [
-            IconButton(onPressed: () => context.read<AuthService>().logout(), icon: const Icon(Icons.logout, color: Colors.white)),
-          ],
-        ),
         body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.school_outlined, size: 56, color: cs.outline),
+              const Text('No school profile linked.'),
               const SizedBox(height: 12),
-              Text('No classes assigned yet', style: Theme.of(context).textTheme.titleMedium?.copyWith(color: cs.onSurfaceVariant)),
-              const SizedBox(height: 4),
-              Text('Ask your admin to assign you to a class.', style: TextStyle(color: cs.onSurfaceVariant)),
+              ElevatedButton(
+                onPressed: () => context.read<AuthService>().logout(),
+                child: const Text('Log out'),
+              ),
             ],
           ),
         ),
       );
     }
 
-    final cid = _selectedClassId!;
+    return StreamBuilder<List<ClassInfo>>(
+      stream: db.watchClasses(schoolId),
+      builder: (context, snap) {
+        final allClasses = snap.data ?? [];
+        // Classes assigned to this teacher
+        final myClasses = allClasses.where((c) => c.teacherUids.contains(teacherUid)).toList();
 
-    return Scaffold(
-      appBar: AppBar(
-        flexibleSpace: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [cs.primary, cs.tertiary],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
-        ),
-        title: const Text('My class', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-        iconTheme: const IconThemeData(color: Colors.white),
-        actions: [
-          IconButton(
-            onPressed: () => context.read<AuthService>().logout(),
-            icon: const Icon(Icons.logout, color: Colors.white),
-          ),
-        ],
-      ),
-      body: StreamBuilder(
-        stream: db.watchClass(sid, cid),
-        builder: (context, classSnap) {
-          final value = classSnap.data?.snapshot.value;
-          if (classSnap.connectionState != ConnectionState.active || value is! Map) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final classInfo = ClassInfo.fromSnapshot(cid, value);
-          final todaySessions = (value['sessions'] as Map?)?[_date] as Map? ?? {};
-          return Column(
-            children: [
-              // Class selector (if multiple classes)
-              if (_myClasses.length > 1)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                  child: DropdownButtonFormField<String>(
-                    value: _selectedClassId,
-                    items: _myClasses.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name))).toList(),
-                    onChanged: (v) {
-                      if (v != null) setState(() => _selectedClassId = v);
-                    },
-                    decoration: const InputDecoration(
-                      labelText: 'Select class',
-                      prefixIcon: Icon(Icons.class_outlined),
-                      isDense: true,
-                    ),
-                  ),
-                ),
-              // Class info header
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: cs.primaryContainer,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(Icons.class_outlined, color: cs.onPrimaryContainer),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(classInfo.name, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
-                          Text(_date, style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: cs.onSurfaceVariant)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // Session controls
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                child: Row(
-                  children: [
-                    _SessionChip(
-                      label: 'AM ${classInfo.windows['am']?['start'] ?? '-'}-${classInfo.windows['am']?['end'] ?? '-'}',
-                      status: _sessionStatus(todaySessions, 'am'),
-                      onClose: _sessionStatus(todaySessions, 'am') == 'open'
-                          ? () => db.endSession(sid, cid, _date, 'am')
-                          : null,
-                    ),
-                    const SizedBox(width: 12),
-                    _SessionChip(
-                      label: 'PM ${classInfo.windows['pm']?['start'] ?? '-'}-${classInfo.windows['pm']?['end'] ?? '-'}',
-                      status: _sessionStatus(todaySessions, 'pm'),
-                      onClose: _sessionStatus(todaySessions, 'pm') == 'open'
-                          ? () => db.endSession(sid, cid, _date, 'pm')
-                          : null,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 4),
-              _ClassAttendanceSummary(schoolId: sid, classId: cid, date: _date),
-              const SizedBox(height: 4),
-              // Roster
-              Expanded(
-                child: _Roster(
-                  schoolId: sid,
-                  classId: cid,
-                  classInfo: classInfo,
-                  onAssignCard: (uid) => db.requestCardAssignment(sid, classInfo.deviceId, uid),
-                  date: _date,
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  String _sessionStatus(Map todaySessions, String window) {
-    final s = todaySessions[window];
-    return s is Map ? s['status']?.toString() ?? 'open' : 'open';
-  }
-}
-
-class _Roster extends StatefulWidget {
-  final String schoolId;
-  final String classId;
-  final ClassInfo classInfo;
-  final Future<void> Function(String uid) onAssignCard;
-  final String date;
-
-  const _Roster({
-    required this.schoolId,
-    required this.classId,
-    required this.classInfo,
-    required this.onAssignCard,
-    required this.date,
-  });
-
-  @override
-  State<_Roster> createState() => _RosterState();
-}
-
-class _RosterState extends State<_Roster> {
-  late List<StudentInfo> _students;
-  Map<String, AttendanceWindow>? _am;
-  Map<String, AttendanceWindow>? _pm;
-  Map<String, Map<String, dynamic>> _studentStats = {};
-
-  @override
-  void initState() {
-    super.initState();
-    _loadRoster();
-  }
-
-  Future<void> _loadRoster() async {
-    final db = context.read<DbService>();
-    _students = await db.fetchStudentsForClass(widget.schoolId, widget.classId);
-    final allData = await db.ref(
-        '${DbService().schoolPath(widget.schoolId)}/attendance/${widget.classId}').get();
-    final map = allData.value is Map ? (allData.value as Map) : {};
-    final tempStats = <String, Map<String, dynamic>>{};
-    for (final s in _students) {
-      int present = 0, total = 0;
-      map.forEach((dateStr, byUid) {
-        if (byUid is Map) {
-          final userData = byUid[s.uid];
-          if (userData is Map) {
-            if (userData['am'] is Map) {
-              total++;
-              if ((userData['am'] as Map)['present'] == true) present++;
-            }
-            if (userData['pm'] is Map) {
-              total++;
-              if ((userData['pm'] as Map)['present'] == true) present++;
-            }
+        if (_selectedClassId == null || !myClasses.any((c) => c.id == _selectedClassId)) {
+          if (myClasses.isNotEmpty) {
+            _selectedClassId = myClasses.first.id;
+          } else {
+            _selectedClassId = null;
           }
         }
-      });
-      tempStats[s.uid] = {
-        'present': present,
-        'total': total,
-        'percentage': total > 0 ? (present / total) * 100.0 : 0.0,
-      };
-    }
-    if (mounted) setState(() { _studentStats = tempStats; });
-  }
 
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return StreamBuilder(
-      stream: context.read<DbService>().ref(
-          '${DbService().schoolPath(widget.schoolId)}/attendance/${widget.classId}/${widget.date}').onValue,
-      builder: (context, snap) {
-        final map = snap.data?.snapshot.value is Map
-            ? (snap.data!.snapshot.value as Map)
-            : <Object?, Object?>{};
-        _am = {};
-        _pm = {};
-        map.forEach((uid, v) {
-          final m = (v as Map);
-          _am![uid.toString()] = AttendanceWindow.fromSnapshot(m['am']);
-          _pm![uid.toString()] = AttendanceWindow.fromSnapshot(m['pm']);
-        });
-        if (_students.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+        return Scaffold(
+          appBar: AppBar(
+            backgroundColor: Colors.white,
+            title: Row(
               children: [
-                Icon(Icons.people_outline, size: 56, color: cs.outline),
-                const SizedBox(height: 12),
-                Text('No students yet', style: Theme.of(context).textTheme.titleMedium?.copyWith(color: cs.onSurfaceVariant)),
-                const SizedBox(height: 4),
-                Text('Share the entry code with students to enroll them.', style: TextStyle(color: cs.onSurfaceVariant)),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFD97706),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.school_rounded, color: Colors.white, size: 18),
+                ),
+                const SizedBox(width: 12),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Teacher Portal', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+                    Text(
+                      meta?.name.isNotEmpty == true ? meta!.name : 'Classroom Attendance & RFID',
+                      style: theme.textTheme.bodySmall?.copyWith(color: const Color(0xFF64748B)),
+                    ),
+                  ],
+                ),
               ],
             ),
-          );
-        }
-        return RefreshIndicator(
-          onRefresh: _loadRoster,
-          child: ListView.separated(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            itemCount: _students.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 2),
-            itemBuilder: (_, i) {
-              final s = _students[i];
-              return Card(
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                  leading: CircleAvatar(
-                    backgroundColor: cs.primaryContainer,
-                    child: Text(s.name.isEmpty ? '?' : s.name[0].toUpperCase(), style: TextStyle(color: cs.onPrimaryContainer, fontWeight: FontWeight.bold)),
-                  ),
-                  title: Text(s.name, style: const TextStyle(fontWeight: FontWeight.w500)),
-                  subtitle: _studentStats.containsKey(s.uid)
-                      ? Text(
-                          _studentStats[s.uid]!['total'] > 0
-                              ? '${_studentStats[s.uid]!['percentage'].toStringAsFixed(1)}% (${_studentStats[s.uid]!['present']}/${_studentStats[s.uid]!['total']})'
-                              : 'No records yet',
-                          style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
-                        )
-                      : Text(s.tagUid.isEmpty ? 'No card assigned' : 'Tag assigned', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _StatusDot(present: _am?[s.uid]?.present ?? false, window: 'AM'),
-                      const SizedBox(width: 16),
-                      _StatusDot(present: _pm?[s.uid]?.present ?? false, window: 'PM'),
-                      const SizedBox(width: 4),
-                      IconButton(
-                        tooltip: 'Assign card',
-                        onPressed: () async {
-                          final messenger = ScaffoldMessenger.of(context);
-                          await widget.onAssignCard(s.uid);
-                          messenger.showSnackBar(
-                            SnackBar(
-                              content: const Text('Scan the new card now'),
-                              behavior: SnackBarBehavior.floating,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                            ),
-                          );
-                        },
-                        icon: Icon(Icons.badge, color: cs.primary),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
+            actions: [
+              IconButton(
+                tooltip: 'Add another class using code',
+                icon: const Icon(Icons.add_link_rounded),
+                onPressed: () => _openClaimClassDialog(context, schoolId, teacherUid),
+              ),
+              IconButton(
+                tooltip: 'Sign out',
+                icon: const Icon(Icons.logout_rounded),
+                onPressed: () => context.read<AuthService>().logout(),
+              ),
+              const SizedBox(width: 8),
+            ],
           ),
+          body: myClasses.isEmpty
+              ? _buildNoClassState(context, schoolId, teacherUid)
+              : _buildTeacherDashboard(context, schoolId, myClasses, _selectedClassId!),
         );
       },
     );
   }
-}
 
-class _ClassAttendanceSummary extends StatefulWidget {
-  final String schoolId;
-  final String classId;
-  final String date;
-  const _ClassAttendanceSummary({required this.schoolId, required this.classId, required this.date});
-
-  @override
-  State<_ClassAttendanceSummary> createState() => _ClassAttendanceSummaryState();
-}
-
-class _ClassAttendanceSummaryState extends State<_ClassAttendanceSummary> {
-  double _percentage = 0;
-  int _todayPresent = 0;
-  int _todayTotal = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  @override
-  void didUpdateWidget(covariant _ClassAttendanceSummary oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.date != widget.date) _load();
-  }
-
-  Future<void> _load() async {
-    final db = context.read<DbService>();
-    final pct = await db.fetchAttendancePercentage(widget.schoolId, widget.classId);
-    final todaySnap = await db.ref(
-        '${DbService().schoolPath(widget.schoolId)}/attendance/${widget.classId}/${widget.date}').get();
-    final map = todaySnap.value is Map ? (todaySnap.value as Map) : {};
-    int present = 0, total = 0;
-    map.forEach((uid, v) {
-      if (v is Map) {
-        if (v['am'] is Map) { total++; if ((v['am'] as Map)['present'] == true) present++; }
-        if (v['pm'] is Map) { total++; if ((v['pm'] as Map)['present'] == true) present++; }
-      }
-    });
-    if (mounted) setState(() { _percentage = pct; _todayPresent = present; _todayTotal = total; });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-      child: Card(
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            gradient: LinearGradient(
-              colors: [cs.primaryContainer, cs.tertiaryContainer],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
+  Widget _buildNoClassState(BuildContext context, String schoolId, String teacherUid) {
+    return Center(
+      child: Container(
+        padding: const EdgeInsets.all(32),
+        constraints: const BoxConstraints(maxWidth: 480),
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: const BoxDecoration(color: Color(0xFFFEF3C7), shape: BoxShape.circle),
+                  child: const Icon(Icons.school_outlined, size: 40, color: Color(0xFFD97706)),
+                ),
+                const SizedBox(height: 20),
+                const Text('No Classes Claimed Yet', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                const Text(
+                  'Enter the Teacher Join Code for your class below, or ask your school administrator to assign you to a classroom.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Color(0xFF64748B), height: 1.4),
+                ),
+                const SizedBox(height: 24),
+                FilledButton.icon(
+                  onPressed: () => _openClaimClassDialog(context, schoolId, teacherUid),
+                  icon: const Icon(Icons.pin_outlined),
+                  label: const Text('Enter Teacher Join Code'),
+                ),
+              ],
             ),
           ),
-          padding: const EdgeInsets.all(16),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTeacherDashboard(
+    BuildContext context,
+    String schoolId,
+    List<ClassInfo> myClasses,
+    String selectedClassId,
+  ) {
+    final selectedClass = myClasses.firstWhere((c) => c.id == selectedClassId);
+
+    return Column(
+      children: [
+        // ── Class Switcher & Student Code Banner ──
+        Container(
+          color: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           child: Row(
             children: [
-              SizedBox(
-                width: 64,
-                height: 64,
-                child: Stack(
-                  alignment: Alignment.center,
+              const Icon(Icons.meeting_room_rounded, color: Color(0xFF2563EB), size: 20),
+              const SizedBox(width: 8),
+              if (myClasses.length > 1)
+                DropdownButton<String>(
+                  value: selectedClassId,
+                  underline: const SizedBox(),
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF0F172A)),
+                  items: myClasses.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name))).toList(),
+                  onChanged: (v) => setState(() => _selectedClassId = v),
+                )
+              else
+                Text(selectedClass.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              const Spacer(),
+              // Student entry code pill for easy sharing
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEFF6FF),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFBFDBFE)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    SizedBox(
-                      width: 64,
-                      height: 64,
-                      child: CircularProgressIndicator(
-                        value: _percentage / 100,
-                        strokeWidth: 6,
-                        backgroundColor: cs.surfaceContainerHighest,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          _percentage >= 75 ? Colors.green : _percentage >= 50 ? Colors.orange : cs.error,
-                        ),
-                        strokeCap: StrokeCap.round,
-                      ),
-                    ),
-                    Text(
-                      '${_percentage.toStringAsFixed(0)}%',
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                    const Icon(Icons.person_add_alt_1_rounded, size: 14, color: Color(0xFF1D4ED8)),
+                    const SizedBox(width: 6),
+                    Text('Student Code: ${selectedClass.studentCode}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Color(0xFF1D4ED8))),
+                    const SizedBox(width: 6),
+                    InkWell(
+                      onTap: () {
+                        Clipboard.setData(ClipboardData(text: selectedClass.studentCode));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Copied Student Code: ${selectedClass.studentCode}')),
+                        );
+                      },
+                      child: const Icon(Icons.copy_rounded, size: 14, color: Color(0xFF1D4ED8)),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Class Attendance', style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Overall: ${_percentage.toStringAsFixed(1)}%',
-                      style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
-                    ),
-                    Text(
-                      'Today: $_todayPresent / $_todayTotal recorded',
-                      style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
-                    ),
-                  ],
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+
+        // ── Tabs Navigation ──
+        Container(
+          color: Colors.white,
+          child: Row(
+            children: [
+              _buildTabButton('Live Attendance Roster', 0, Icons.fact_check_rounded),
+              _buildTabButton('RFID Badge Kiosk', 1, Icons.credit_card_rounded),
+              _buildTabButton('History & Records', 2, Icons.history_rounded),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+
+        // ── Active Tab Body ──
+        Expanded(
+          child: IndexedStack(
+            index: _currentTab,
+            children: [
+              _TeacherLiveRosterTab(schoolId: schoolId, classInfo: selectedClass, date: _date),
+              _TeacherRfidKioskTab(schoolId: schoolId, classInfo: selectedClass),
+              _TeacherHistoryTab(schoolId: schoolId, classInfo: selectedClass),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTabButton(String label, int index, IconData icon) {
+    final isSelected = _currentTab == index;
+    return Expanded(
+      child: InkWell(
+        onTap: () => setState(() => _currentTab = index),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color: isSelected ? const Color(0xFF2563EB) : Colors.transparent,
+                width: 3,
+              ),
+            ),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 18, color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF64748B)),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                  color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF64748B),
                 ),
               ),
             ],
@@ -496,72 +275,498 @@ class _ClassAttendanceSummaryState extends State<_ClassAttendanceSummary> {
       ),
     );
   }
+
+  void _openClaimClassDialog(BuildContext context, String schoolId, String teacherUid) {
+    final controller = TextEditingController();
+    bool busy = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Claim Class via Teacher Code'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Enter the Teacher Join Code provided by your school administrator (e.g. TCH-XXXXX).', style: TextStyle(fontSize: 13, color: Color(0xFF64748B))),
+              const SizedBox(height: 16),
+              TextField(
+                controller: controller,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(labelText: 'Teacher Join Code', prefixIcon: Icon(Icons.vpn_key_outlined)),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: busy ? null : () => Navigator.pop(ctx), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      final code = controller.text.trim();
+                      if (code.isEmpty) return;
+
+                      setDialogState(() => busy = true);
+                      final db = context.read<DbService>();
+                      final err = await db.claimClassWithTeacherCode(schoolId, teacherUid, code);
+                      if (!ctx.mounted) return;
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(err.isEmpty ? 'Class successfully claimed!' : err)),
+                      );
+                    },
+              child: busy ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Claim Class'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-class _SessionChip extends StatelessWidget {
-  final String label;
-  final String status;
-  final VoidCallback? onClose;
+// ══════════════════════════════════════════════════════════════════
+// TAB 1: LIVE ATTENDANCE ROSTER
+// ══════════════════════════════════════════════════════════════════
 
-  const _SessionChip({required this.label, required this.status, this.onClose});
+class _TeacherLiveRosterTab extends StatelessWidget {
+  final String schoolId;
+  final ClassInfo classInfo;
+  final String date;
+
+  const _TeacherLiveRosterTab({
+    required this.schoolId,
+    required this.classInfo,
+    required this.date,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final open = status == 'open';
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(
-        color: open ? cs.primaryContainer : cs.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: open ? cs.primary.withValues(alpha: 0.3) : cs.outlineVariant,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            open ? Icons.lock_open_rounded : Icons.lock_outline_rounded,
-            size: 16,
-            color: open ? cs.onPrimaryContainer : cs.onSurfaceVariant,
-          ),
-          const SizedBox(width: 6),
-          Text(
-            '$label \u00b7 ${open ? 'open' : 'closed'}',
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              color: open ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+    final db = context.read<DbService>();
+    final am = classInfo.windows['am'];
+    final pm = classInfo.windows['pm'];
+
+    return StreamBuilder(
+      stream: db.watchClassAttendanceDate(schoolId, classInfo.id, date),
+      builder: (context, attSnap) {
+        final attMap = attSnap.data?.snapshot.value is Map ? (attSnap.data!.snapshot.value as Map) : {};
+
+        return StreamBuilder<List<StudentInfo>>(
+          stream: db.watchStudentsForClass(schoolId, classInfo.id),
+          builder: (context, studentSnap) {
+            final students = studentSnap.data ?? [];
+
+            int amPresentCount = 0;
+            int pmPresentCount = 0;
+            for (final s in students) {
+              final userAtt = attMap[s.uid] as Map?;
+              if (userAtt?['am']?['present'] == true) amPresentCount++;
+              if (userAtt?['pm']?['present'] == true) pmPresentCount++;
+            }
+
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1000),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Windows Overview Strip
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildSessionCard(
+                            title: 'Morning Window (AM)',
+                            time: '${am?['start'] ?? '08:00'} - ${am?['end'] ?? '08:20'}',
+                            present: amPresentCount,
+                            total: students.length,
+                            color: const Color(0xFF2563EB),
+                            onClose: () => db.endSession(schoolId, classInfo.id, date, 'am'),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: _buildSessionCard(
+                            title: 'Afternoon Window (PM)',
+                            time: '${pm?['start'] ?? '14:40'} - ${pm?['end'] ?? '15:00'}',
+                            present: pmPresentCount,
+                            total: students.length,
+                            color: const Color(0xFF059669),
+                            onClose: () => db.endSession(schoolId, classInfo.id, date, 'pm'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+
+                    // Student Roster Header
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Live Classroom Roster (${students.length} students)', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        Text('Date: $date', style: const TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF64748B))),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+
+                    if (students.isEmpty)
+                      const Card(
+                        child: Padding(
+                          padding: EdgeInsets.all(32),
+                          child: Center(
+                            child: Text('No students have enrolled in this class yet. Share the Student Entry Code.'),
+                          ),
+                        ),
+                      )
+                    else
+                      ListView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: students.length,
+                        itemBuilder: (context, i) {
+                          final s = students[i];
+                          final userAtt = attMap[s.uid] as Map?;
+                          final amData = userAtt?['am'] as Map?;
+                          final pmData = userAtt?['pm'] as Map?;
+                          final amPresent = amData?['present'] == true;
+                          final pmPresent = pmData?['present'] == true;
+
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            child: ListTile(
+                              leading: CircleAvatar(
+                                backgroundColor: (amPresent || pmPresent) ? const Color(0xFFECFDF5) : const Color(0xFFF1F5F9),
+                                child: Text(
+                                  s.name.isNotEmpty ? s.name[0].toUpperCase() : 'S',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: (amPresent || pmPresent) ? const Color(0xFF059669) : const Color(0xFF64748B),
+                                  ),
+                                ),
+                              ),
+                              title: Text(s.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                              subtitle: Text(s.hasTag ? 'Tag: ${s.tagUid}' : 'No RFID tag bound', style: const TextStyle(fontSize: 12)),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _buildAttendanceBadge('AM', amPresent, amData?['firstScan']),
+                                  const SizedBox(width: 8),
+                                  _buildAttendanceBadge('PM', pmPresent, pmData?['firstScan']),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildSessionCard({
+    required String title,
+    required String time,
+    required int present,
+    required int total,
+    required Color color,
+    required VoidCallback onClose,
+  }) {
+    final pct = total > 0 ? (present / total * 100).toInt() : 0;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                Text('$time IST', style: TextStyle(color: color, fontWeight: FontWeight.w600, fontSize: 12)),
+              ],
             ),
-          ),
-          if (open && onClose != null) ...[
-            const SizedBox(width: 8),
-            GestureDetector(
-              onTap: onClose,
-              child: Icon(Icons.close_rounded, size: 16, color: cs.onPrimaryContainer),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Text('$present / $total', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                const SizedBox(width: 8),
+                Text('Present ($pct%)', style: const TextStyle(color: Color(0xFF64748B), fontSize: 13)),
+                const Spacer(),
+                OutlinedButton(
+                  onPressed: onClose,
+                  style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+                  child: const Text('Close Session', style: TextStyle(fontSize: 12)),
+                ),
+              ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAttendanceBadge(String window, bool present, dynamic firstScanTs) {
+    String timeStr = '';
+    if (firstScanTs is num && firstScanTs > 0) {
+      final dt = DateTime.fromMillisecondsSinceEpoch(firstScanTs.toInt());
+      timeStr = ' • ${DateFormat('HH:mm').format(dt)}';
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: present ? const Color(0xFFECFDF5) : const Color(0xFFFEF2F2),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: present ? const Color(0xFF10B981) : const Color(0xFFFCA5A5)),
+      ),
+      child: Text(
+        '$window: ${present ? "Present$timeStr" : "Absent"}',
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+          color: present ? const Color(0xFF059669) : const Color(0xFFDC2626),
+        ),
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// TAB 2: RFID BADGE ASSIGNMENT KIOSK
+// ══════════════════════════════════════════════════════════════════
+
+class _TeacherRfidKioskTab extends StatefulWidget {
+  final String schoolId;
+  final ClassInfo classInfo;
+
+  const _TeacherRfidKioskTab({required this.schoolId, required this.classInfo});
+
+  @override
+  State<_TeacherRfidKioskTab> createState() => _TeacherRfidKioskTabState();
+}
+
+class _TeacherRfidKioskTabState extends State<_TeacherRfidKioskTab> {
+  @override
+  Widget build(BuildContext context) {
+    final db = context.read<DbService>();
+    final deviceId = widget.classInfo.deviceId;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 900),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('RFID Card Assignment Kiosk', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            Text(
+              deviceId.isNotEmpty
+                  ? 'Classroom Reader Linked: $deviceId'
+                  : 'Warning: No classroom reader linked to this class. Ask admin to link reader MAC.',
+              style: TextStyle(
+                color: deviceId.isNotEmpty ? const Color(0xFF059669) : Colors.redAccent,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // Live Enrollment Status Banner
+            if (deviceId.isNotEmpty)
+              StreamBuilder<Map<String, dynamic>?>(
+                stream: db.watchEnrollCommand(deviceId),
+                builder: (context, snap) {
+                  final cmd = snap.data;
+                  if (cmd != null) {
+                    final targetName = cmd['studentName'] ?? 'Student';
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 20),
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEFF6FF),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: const Color(0xFF3B82F6), width: 2),
+                      ),
+                      child: Row(
+                        children: [
+                          const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(strokeWidth: 3, color: Color(0xFF2563EB)),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Waiting for Card Tap for: $targetName', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF1D4ED8))),
+                                const SizedBox(height: 4),
+                                const Text('Ask the student to tap their new RFID badge on the classroom reader now.', style: TextStyle(color: Color(0xFF1E40AF), fontSize: 13)),
+                              ],
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () => db.cancelCardAssignment(deviceId),
+                            child: const Text('Cancel'),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+                  return const SizedBox.shrink();
+                },
+              ),
+
+            // Student Roster with Card Binding buttons
+            StreamBuilder<List<StudentInfo>>(
+              stream: db.watchStudentsForClass(widget.schoolId, widget.classInfo.id),
+              builder: (context, snap) {
+                final students = snap.data ?? [];
+
+                if (students.isEmpty) {
+                  return const Card(
+                    child: Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Center(child: Text('No students in this class yet.')),
+                    ),
+                  );
+                }
+
+                return ListView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: students.length,
+                  itemBuilder: (context, i) {
+                    final s = students[i];
+                    return Card(
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: s.hasTag ? const Color(0xFFECFDF5) : const Color(0xFFFEF3C7),
+                          child: Icon(
+                            s.hasTag ? Icons.credit_card_rounded : Icons.credit_card_off_rounded,
+                            color: s.hasTag ? const Color(0xFF059669) : const Color(0xFFD97706),
+                            size: 20,
+                          ),
+                        ),
+                        title: Text(s.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                        subtitle: Text(s.hasTag ? 'Tag UID: ${s.tagUid}' : 'Unassigned (Needs Card)'),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            FilledButton.tonalIcon(
+                              onPressed: deviceId.isEmpty
+                                  ? null
+                                  : () async {
+                                      await db.requestCardAssignment(deviceId, s.uid, studentName: s.name);
+                                    },
+                              icon: const Icon(Icons.sensors_rounded, size: 16),
+                              label: Text(s.hasTag ? 'Reassign via Tap' : 'Assign via Tap'),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              icon: const Icon(Icons.edit_outlined, size: 18),
+                              tooltip: 'Enter UID manually',
+                              onPressed: () => _openManualUidDialog(context, widget.schoolId, s),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openManualUidDialog(BuildContext context, String schoolId, StudentInfo student) {
+    final controller = TextEditingController(text: student.tagUid);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Manual Card UID for ${student.name}'),
+        content: TextField(
+          controller: controller,
+          textCapitalization: TextCapitalization.characters,
+          decoration: const InputDecoration(labelText: 'Card UID (Hexadecimal e.g. 84F3EBA1)'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await context.read<DbService>().setStudentTagUid(schoolId, student.uid, controller.text);
+            },
+            child: const Text('Save'),
+          ),
         ],
       ),
     );
   }
 }
 
-class _StatusDot extends StatelessWidget {
-  final bool present;
-  final String window;
+// ══════════════════════════════════════════════════════════════════
+// TAB 3: ATTENDANCE HISTORY & RECORDS
+// ══════════════════════════════════════════════════════════════════
 
-  const _StatusDot({required this.present, required this.window});
+class _TeacherHistoryTab extends StatefulWidget {
+  final String schoolId;
+  final ClassInfo classInfo;
+
+  const _TeacherHistoryTab({required this.schoolId, required this.classInfo});
+
+  @override
+  State<_TeacherHistoryTab> createState() => _TeacherHistoryTabState();
+}
+
+class _TeacherHistoryTabState extends State<_TeacherHistoryTab> {
+  DateTime _selectedDate = DateTime.now();
 
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      message: '$window: ${present ? 'present' : 'absent'}',
-      child: Icon(
-        present ? Icons.check_circle_rounded : Icons.cancel_outlined,
-        color: present ? Colors.green : Colors.grey.shade400,
-        size: 22,
+    final dateStr = DateFormat('yyyy-MM-dd').format(_selectedDate);
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 900),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Attendance Archive', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                FilledButton.tonalIcon(
+                  onPressed: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: _selectedDate,
+                      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+                      lastDate: DateTime.now(),
+                    );
+                    if (picked != null) setState(() => _selectedDate = picked);
+                  },
+                  icon: const Icon(Icons.calendar_month_rounded, size: 18),
+                  label: Text(DateFormat('EEE, d MMM yyyy').format(_selectedDate)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+
+            _TeacherLiveRosterTab(
+              schoolId: widget.schoolId,
+              classInfo: widget.classInfo,
+              date: dateStr,
+            ),
+          ],
+        ),
       ),
     );
   }

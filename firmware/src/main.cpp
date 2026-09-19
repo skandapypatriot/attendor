@@ -4,6 +4,8 @@
 #include "secrets.h"
 #endif
 
+#include "config.h"
+
 #if defined(ESP8266)
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
@@ -25,7 +27,6 @@
 #include <qrcode.h>
 #endif
 
-#include "config.h"
 
 #define SS_PIN RC522_SS_PIN
 #define RST_PIN RC522_RST_PIN
@@ -34,7 +35,7 @@ MFRC522 mfrc522(SS_PIN, RST_PIN);
 WiFiClientSecure secureClient;
 
 #if OLED_ENABLED
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ OLED_SCL_PIN, /* data=*/ OLED_SDA_PIN);
+U8G2_SH1106_128X64_NONAME_F_SW_I2C display(U8G2_R0, OLED_SCL_PIN, OLED_SDA_PIN, U8X8_PIN_NONE);
 bool oledPresent = false;
 #endif
 
@@ -163,7 +164,7 @@ void oledBootScreen() {
   display.setFont(u8g2_font_5x7_tr);
   display.drawStr(36, 28, "booting...");
   oledProgressBar(14, 40, 100, 8, 0);
-  display.display();
+  display.sendBuffer();
 }
 
 void oledBootStep(int step, int total, const String &label, bool ok) {
@@ -175,7 +176,7 @@ void oledBootStep(int step, int total, const String &label, bool ok) {
   else oledDrawX(0, y - 6);
   display.drawStr(14, y, label.c_str());
   oledProgressBar(14, 56, 100, 8, (step + 1) * 100 / total);
-  display.display();
+  display.sendBuffer();
 }
 
 void oledReady(const String &className, const String &mac) {
@@ -188,7 +189,7 @@ void oledReady(const String &className, const String &mac) {
   display.drawStr(30, 46, "CARD");
   display.setFont(u8g2_font_4x6_tr);
   display.drawStr(0, 64, mac.c_str());
-  display.display();
+  display.sendBuffer();
 }
 
 void oledPairQR() {
@@ -203,7 +204,7 @@ void oledScanning(const String &uid) {
   display.drawStr(20, 36, "Processing...");
   display.setFont(u8g2_font_4x6_tr);
   if (uid.length()) display.drawStr(0, 52, uid.c_str());
-  display.display();
+  display.sendBuffer();
 }
 
 void oledResult(bool ok, const String &title, const String &msg) {
@@ -221,7 +222,26 @@ void oledResult(bool ok, const String &title, const String &msg) {
     int mw = display.getStrWidth(trunc.c_str());
     display.drawStr((128 - mw) / 2, 56, trunc.c_str());
   }
-  display.display();
+  display.sendBuffer();
+}
+
+void oledAttendanceResult(const String &name, const String &window) {
+  if (!oledPresent) { logLine("INFO", "ATTEND: " + name); return; }
+  display.clearDisplay();
+  oledStatusBar("PRESENT", window);
+  if (name.length() > 0) {
+    display.setFont(u8g2_font_7x14B_tf);
+    String dispName = name.length() > 16 ? name.substring(0, 16) : name;
+    int nw = display.getStrWidth(dispName.c_str());
+    display.drawStr((128 - nw) / 2, 40, dispName.c_str());
+    display.setFont(u8g2_font_5x7_tr);
+    display.drawStr(0, 60, "Attendance marked");
+  } else {
+    oledDrawCheck(50, 20);
+    display.setFont(u8g2_font_7x14B_tf);
+    display.drawStr(30, 40, "PRESENT");
+  }
+  display.sendBuffer();
 }
 
 void oledOffline(const String &uid) {
@@ -234,7 +254,7 @@ void oledOffline(const String &uid) {
   display.drawStr(20, 50, "Scan queued");
   display.setFont(u8g2_font_4x6_tr);
   if (uid.length()) display.drawStr(0, 62, uid.c_str());
-  display.display();
+  display.sendBuffer();
 }
 
 void oledEnroll() {
@@ -245,7 +265,7 @@ void oledEnroll() {
   oledDrawCard(50, 20);
   display.drawStr(0, 44, "Scan student");
   display.drawStr(0, 54, "card now");
-  display.display();
+  display.sendBuffer();
 }
 
 void oledLinked(const String &classId) {
@@ -259,7 +279,7 @@ void oledLinked(const String &classId) {
   display.drawStr((128 - cw) / 2, 40, classId.c_str());
   display.setFont(u8g2_font_4x6_tr);
   display.drawStr(0, 62, "Device ready");
-  display.display();
+  display.sendBuffer();
 }
 
 void oledWifiLost() {
@@ -270,7 +290,7 @@ void oledWifiLost() {
   display.drawStr(16, 36, "WiFi LOST");
   display.setFont(u8g2_font_5x7_tr);
   display.drawStr(24, 52, "retrying...");
-  display.display();
+  display.sendBuffer();
 }
 
 void show(int size, const String &line1, const String &line2 = "") {
@@ -283,7 +303,7 @@ void show(int size, const String &line1, const String &line2 = "") {
   display.setFont(u8g2_font_5x7_tr);
   display.drawStr(0, 12, line1.c_str());
   if (line2.length()) display.drawStr(0, 24, line2.c_str());
-  display.display();
+  display.sendBuffer();
 }
 
 #else
@@ -415,7 +435,7 @@ void processCard(const String &tagUid) {
   doc["ts"] = ts;
   doc["type"] = type;
   String body;
-  serializeJson(doc, body);
+  serializeJson(doc, body); 
 
   HttpResult r = httpRequest("POST",
       urlWithAuth(devicePath() + "/scans"), body);
@@ -445,16 +465,24 @@ void processCard(const String &tagUid) {
       deserializeJson(rd, rr.body);
       bool ok = rd["ok"] | false;
       String msg = rd["message"] | "";
+      String window = rd["window"] | "";
       logLine(ok ? "INFO" : "WARN", String("result ok=") + (ok ? "true" : "false") +
                                    " msg=" + msg);
 #if OLED_ENABLED
-      oledResult(ok, ok ? "PRESENT" : "NOT OK", msg);
+      if (ok && type == "attend") {
+        String personName = msg;
+        int colonIdx = msg.indexOf(':');
+        if (colonIdx > 0) personName = msg.substring(colonIdx + 2);
+        oledAttendanceResult(personName, window);
+      } else {
+        oledResult(ok, ok ? "PRESENT" : "NOT OK", msg);
+      }
 #else
       show(ok ? 2 : 1, ok ? "PRESENT" : "NOT OK", msg.length() > 14 ? msg.substring(0, 14) : msg);
 #endif
       break;
     }
-    delay(200);
+    delay(50);
   }
   processingScan = false;
 }
@@ -541,7 +569,7 @@ void showPairQr() {
       }
     }
   }
-  display.display();
+  display.sendBuffer();
 }
 #endif
 
@@ -595,7 +623,6 @@ void setup() {
 
 #if OLED_ENABLED
   const int BOOT_STEPS = 7;
-  Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
   oledPresent = display.begin();
   if (!oledPresent) {
     logLine("WARN", "OLED not detected, running headless");
@@ -607,7 +634,7 @@ void setup() {
 #if OLED_ENABLED
   if (oledPresent) {
     oledBootStep(0, BOOT_STEPS, "OLED", true);
-    delay(300);
+    delay(150);
   } else {
     logLine("INFO", "Step 1/7 OLED  [SKIP]");
   }
@@ -622,14 +649,14 @@ void setup() {
   #endif
   mfrc522.PCD_Init();
 #if OLED_ENABLED
-  if (oledPresent) { oledBootStep(1, BOOT_STEPS, "RFID", true); delay(300); }
+  if (oledPresent) { oledBootStep(1, BOOT_STEPS, "RFID", true); delay(150); }
 #endif
 
   // Step 3: Storage
   bool storageOk = storageBegin();
   if (!storageOk) logLine("WARN", "storage init failed");
 #if OLED_ENABLED
-  if (oledPresent) { oledBootStep(2, BOOT_STEPS, "Storage", storageOk); delay(300); }
+  if (oledPresent) { oledBootStep(2, BOOT_STEPS, "Storage", storageOk); delay(150); }
 #endif
 
   // Step 4: WiFi
@@ -647,7 +674,7 @@ void setup() {
 #if OLED_ENABLED
   if (oledPresent) {
     oledBootStep(3, BOOT_STEPS, wifiOk ? WiFi.localIP().toString().c_str() : "WiFi FAILED", wifiOk);
-    delay(500);
+    delay(250);
   }
 #endif
   if (wifiOk) {
@@ -661,14 +688,14 @@ void setup() {
     }
     timeValid = time(nullptr) >= 100000;
 #if OLED_ENABLED
-    if (oledPresent) { oledBootStep(4, BOOT_STEPS, timeValid ? "NTP synced" : "NTP FAILED", timeValid); delay(300); }
+    if (oledPresent) { oledBootStep(4, BOOT_STEPS, timeValid ? "NTP synced" : "NTP FAILED", timeValid); delay(150); }
 #endif
     logLine(timeValid ? "INFO" : "WARN", timeValid ? "NTP synced" : "NTP not synced");
 
     // Step 6: Firebase auth
     bool authOk = signIn();
 #if OLED_ENABLED
-    if (oledPresent) { oledBootStep(5, BOOT_STEPS, authOk ? "Firebase" : "Auth FAILED", authOk); delay(300); }
+    if (oledPresent) { oledBootStep(5, BOOT_STEPS, authOk ? "Firebase" : "Auth FAILED", authOk); delay(150); }
 #endif
     if (!authOk) logLine("ERROR", "firebase sign-in failed at boot");
   } else {
@@ -689,7 +716,7 @@ void setup() {
 #if OLED_ENABLED
   if (oledPresent) {
     oledBootStep(6, BOOT_STEPS, linked ? linkedClass.c_str() : "PAIR CODE", linked);
-    delay(800);
+    delay(300);
   }
 #endif
 
@@ -701,7 +728,7 @@ void setup() {
     } else {
       showPairQr();
     }
-    delay(1500);
+    delay(600);
     oledReady(linkedClass, MAC_ID);
   } else {
     show(1, "TAP CARD");
